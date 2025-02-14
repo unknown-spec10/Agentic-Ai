@@ -1,5 +1,6 @@
-streamlit
+streamlit==0.45.3
 agno==1.0.5
-yfinance
-duckduckgo
-groq
+yfinance==0.2.52
+docstring_parser==0.16
+duckduckgo_search==7.3.0
+groq==0.17.0
