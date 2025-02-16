@@ -2,12 +2,11 @@ from agno.agent import Agent
 from agno.tools.yfinance import YFinanceTools
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.models.groq import Groq
-from agno.models.deepseek import DeepSeek
 from agno.tools.googlesearch import GoogleSearch
 
 
 # Define the model
-model = Groq(id="llama-3.3-70b-versatile", api_key="sk-a8338be3d2c34ed28ebcec1068414e08")
+model = Groq(id="llama-3.3-70b-versatile", api_key="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")
 
 # Define the financial data retrieval agent
 financial_agent = Agent(
