@@ -1,8 +1,8 @@
-streamlit
-pdfplumber
-pytesseract
-pdf2image
-Pillow
-requests
-transformers
+streamlit==1.27.0
+pdfplumber==0.7.6
+pytesseract==0.3.10
+pdf2image==1.16.3
+Pillow==9.5.0
+requests==2.31.0
+transformers==4.31.0
 torch==2.0.1
