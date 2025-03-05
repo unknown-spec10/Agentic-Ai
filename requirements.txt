@@ -4,3 +4,5 @@ pytesseract
 pdf2image
 Pillow
 requests
+transformers
+torch
