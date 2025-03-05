@@ -3,11 +3,10 @@ import pdfplumber
 import json
 import pytesseract
 import pdf2image
+import requests
 from langchain_community.llms.ollama import Ollama
 from langchain_community.llms import Ollama
-import tiktoken
 
-# Function to extract text from PDF
 def extract_text_from_pdf(pdf_file):
     """Extracts text from a PDF file, handling NoneType errors."""
     text = ""
@@ -22,7 +21,6 @@ def extract_text_from_pdf(pdf_file):
         return None
     return text.strip() if text else None
 
-# Function to extract text from scanned PDFs using OCR
 def extract_text_with_ocr(pdf_file):
     """Uses OCR to extract text from a scanned PDF file."""
     try:
@@ -33,51 +31,28 @@ def extract_text_with_ocr(pdf_file):
         st.error(f"OCR error: {e}")
         return None
 
-# Function to truncate text to fit within model token limits
-def truncate_text(text, model="glm4:latest"):
-    """Ensures text does not exceed model's token limit."""
-    try:
-        enc = tiktoken.encoding_for_model(model)
-        tokens = enc.encode(text)
-        return enc.decode(tokens[:3000])  # Truncate properly
-    except Exception:
-        return text[:3000]  # Fallback if encoding fails
-
-# Function to generate structured JSON using LLM
 def generate_json_from_text(text, model="glm4:latest"):
     """Uses LLM to structure resume text into JSON format."""
     llm = Ollama(model=model)
-    
-    truncated_text = truncate_text(text, model)
-
     prompt = f"""
     Extract key details from the following resume text:
-    
-    {truncated_text}
-
+    {text}
     Provide the output in valid JSON format with fields:
     - name
     - email
     - phone
-    -`skills`: A flat list of strings (e.g., `["Python", "Machine Learning", "Java"]`)
-    -`experience`: A list of job roles (e.g., `["Software Engineer", "Data Scientist"]`)
-    -`education`: A list of dictionaries, each containing `degree` and `institution`
-    -`certifications`: A flat list of strings (e.g., `["AWS Certified", "Google Cloud"]`)
-    Ensure the JSON is correctly formatted, without extra text or explanations.
+    - skills (list)
+    - experience (list of job roles)
+    - education (list of degrees)
     """
-
     try:
         response = llm.invoke(prompt).strip()
-        structured_data = json.loads(response)  # Convert response to JSON
+        structured_data = json.loads(response)
         return structured_data
     except json.JSONDecodeError:
-        st.error(f"LLM response is not valid JSON:\n{response}")  # Show output for debugging
-        return None
-    except Exception as e:
-        st.error(f"Error calling LLM: {e}")
+        st.error(f"LLM response is not valid JSON:\n{response}")
         return None
 
-# Function to search job links based on skills
 def search_job_links(skills):
     """Generates job search links based on extracted skills."""
     job_links = []
@@ -86,60 +61,66 @@ def search_job_links(skills):
         "LinkedIn": "https://www.linkedin.com/jobs/search?keywords={}",
         "Glassdoor": "https://www.glassdoor.com/Job/jobs.htm?sc.keyword={}"
     }
-
     for skill in skills:
         for platform, url in platforms.items():
             search_url = url.format(skill.replace(" ", "+"))
             job_links.append((platform, search_url))
-
     return job_links
 
-# Streamlit UI
+def analyze_skill_gap(skills):
+    """Compares extracted skills with required skills for job roles using an API."""
+    api_url = "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"
+    headers = {"Authorization": "Bearer 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"}
+    data = {"skills": skills}
+    try:
+        response = requests.post(api_url, json=data, headers=headers)
+        response_data = response.json()
+        return response_data.get("missing_skills", []), response_data.get("suggested_roles", [])
+    except Exception as e:
+        st.error(f"Error fetching skill gap analysis: {e}")
+        return [], []
+
+def suggest_learning_resources(missing_skills):
+    """Suggests online courses based on missing skills."""
+    course_links = []
+    for skill in missing_skills:
+        course_links.append(f"https://www.udemy.com/courses/search/?q={skill}")
+        course_links.append(f"https://www.coursera.org/search?query={skill}")
+    return course_links
+
 st.title("📄 Resume IT")
-st.write("Upload a resume (PDF) and extract structured information, including job opportunities based on your skills.")
+st.write("Upload a resume (PDF) and extract structured information, analyze skill gaps, and find jobs!")
 
 uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 
 if uploaded_file:
     st.success("File uploaded successfully! Extracting text...")
-
-    # Extract text using PDF or OCR
-    pdf_text = extract_text_from_pdf(uploaded_file)
-    
-    if not pdf_text:
-        st.warning("No text extracted from the PDF. Attempting OCR...")
-        uploaded_file.seek(0)  # Reset file pointer for OCR
-        pdf_text = extract_text_with_ocr(uploaded_file)
-
-    if not pdf_text:
-        st.error("No text extracted. Ensure it's not a scanned document or try another file.")
-    else:
-        # Show extracted text
+    pdf_text = extract_text_from_pdf(uploaded_file) or extract_text_with_ocr(uploaded_file)
+    if pdf_text:
         st.subheader("Extracted Resume Text")
         st.text_area("Resume Content", pdf_text, height=300)
-
-        # Process with LLM
         with st.spinner("Generating structured data..."):
             structured_data = generate_json_from_text(pdf_text)
-
         if structured_data:
             st.subheader("📌 Extracted Information")
             st.json(structured_data)
-            
-            # Search job links based on skills
-            if "skills" in structured_data:
+            skills = structured_data.get("skills", [])
+            if skills:
+                missing_skills, suggested_roles = analyze_skill_gap(skills)
+                st.subheader("🔍 Skill Gap Analysis")
+                st.write("**Missing Skills:**", missing_skills)
+                st.write("**Suggested Roles:**", suggested_roles)
+                learning_links = suggest_learning_resources(missing_skills)
+                st.subheader("🎓 Suggested Learning Resources")
+                for link in learning_links:
+                    st.markdown(f"[🔗 Course]({link})")
+                job_links = search_job_links(skills)
                 st.subheader("💼 Job Opportunities")
-                job_links = search_job_links(structured_data["skills"])
                 for platform, link in job_links:
                     st.markdown(f"[🔗 {platform} Job Search]({link})")
-
-            # Download JSON option
-            json_output = json.dumps(structured_data, indent=4)
-            st.download_button(
-                label="📥 Download JSON",
-                data=json_output,
-                file_name="resume_data.json",
-                mime="application/json"
-            )
+                json_output = json.dumps(structured_data, indent=4)
+                st.download_button("📥 Download JSON", data=json_output, file_name="resume_data.json", mime="application/json")
         else:
-            st.error("Failed to generate structured JSON. Please check the LLM response.")
+            st.error("Failed to generate structured JSON.")
+    else:
+        st.error("Failed to extract text from the PDF file.")
