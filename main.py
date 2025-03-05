@@ -38,7 +38,7 @@ def extract_text_with_ocr(pdf_file):
 def generate_json_from_text(text):
     """
     Uses an open source model (FLAN-T5-small) to generate structured JSON from resume text.
-    If the output is not valid JSON, a regex-based fallback is used.
+    If the output is not valid JSON, falls back to regex extraction.
     """
     prompt = f"""Extract key details from the following resume text.
 Return your answer in valid JSON format with keys:
@@ -48,7 +48,7 @@ Return your answer in valid JSON format with keys:
 - skills (list)
 - experience (list of job roles)
 - education (list of degrees)
-Do not include any additional text.
+Do not include any extra text.
 
 Resume text:
 {text}"""
@@ -68,8 +68,8 @@ Resume text:
 def generate_json_from_text_fallback(text):
     """
     Uses regex to extract basic details from resume text as a fallback.
-    Extracts email, phone, and assumes the first non-empty line is the name.
-    Skills, experience, and education are returned as empty lists.
+    Extracts email, phone, and uses the first non-empty line as the name.
+    Skills, experience, and education are left empty.
     """
     email_pattern = r"[\w\.-]+@[\w\.-]+\.\w+"
     phone_pattern = r"(\+?\d[\d\s\-\(\)]{7,}\d)"
@@ -108,8 +108,8 @@ def search_job_links(skills):
 
 def analyze_skill_gap(skills):
     """Compares extracted skills with required skills for job roles using an API."""
-    # For demonstration, this uses a hardcoded API endpoint and key.
-    # Replace these with your own open source solution or API as needed.
+    # For demonstration, this function uses a hardcoded API endpoint.
+    # Replace with your own solution if available.
     api_url = "https://api.groq.com/match-jobs"
     api_key = "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"
     headers = {"Authorization": f"Bearer {api_key}"}
