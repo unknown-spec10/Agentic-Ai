@@ -5,7 +5,7 @@ import pytesseract
 import pdf2image
 import requests
 from langchain_community.llms.ollama import Ollama
-from langchain_community.llms import Ollama
+# Removed duplicate import of Ollama
 
 def extract_text_from_pdf(pdf_file):
     """Extracts text from a PDF file, handling NoneType errors."""
@@ -24,6 +24,8 @@ def extract_text_from_pdf(pdf_file):
 def extract_text_with_ocr(pdf_file):
     """Uses OCR to extract text from a scanned PDF file."""
     try:
+        # Reset file pointer
+        pdf_file.seek(0)
         images = pdf2image.convert_from_bytes(pdf_file.read())
         text = "\n".join([pytesseract.image_to_string(img) for img in images])
         return text.strip() if text else None
@@ -69,11 +71,14 @@ def search_job_links(skills):
 
 def analyze_skill_gap(skills):
     """Compares extracted skills with required skills for job roles using an API."""
-    api_url = "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"
-    headers = {"Authorization": "Bearer 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"}
+    # Hardcoded API endpoint and API key for demonstration purposes.
+    api_url = "https://api.groq.com/match-jobs"
+    api_key = "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"
+    headers = {"Authorization": f"Bearer {api_key}"}
     data = {"skills": skills}
     try:
         response = requests.post(api_url, json=data, headers=headers)
+        response.raise_for_status()
         response_data = response.json()
         return response_data.get("missing_skills", []), response_data.get("suggested_roles", [])
     except Exception as e:
@@ -95,6 +100,7 @@ uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 
 if uploaded_file:
     st.success("File uploaded successfully! Extracting text...")
+    uploaded_file.seek(0)
     pdf_text = extract_text_from_pdf(uploaded_file) or extract_text_with_ocr(uploaded_file)
     if pdf_text:
         st.subheader("Extracted Resume Text")
