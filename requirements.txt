@@ -5,4 +5,4 @@ pdf2image
 Pillow
 requests
 transformers
-torch
+torch==2.0.1
