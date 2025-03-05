@@ -5,6 +5,10 @@ import pytesseract
 import pdf2image
 import re
 import requests
+from transformers import pipeline
+
+# Initialize the open source text generation model (FLAN-T5-small)
+t5_generator = pipeline("text2text-generation", model="google/flan-t5-small")
 
 def extract_text_from_pdf(pdf_file):
     """Extracts text from a PDF file, handling NoneType errors."""
@@ -31,11 +35,41 @@ def extract_text_with_ocr(pdf_file):
         st.error(f"OCR error: {e}")
         return None
 
+def generate_json_from_text(text):
+    """
+    Uses an open source model (FLAN-T5-small) to generate structured JSON from resume text.
+    If the output is not valid JSON, a regex-based fallback is used.
+    """
+    prompt = f"""Extract key details from the following resume text.
+Return your answer in valid JSON format with keys:
+- name
+- email
+- phone
+- skills (list)
+- experience (list of job roles)
+- education (list of degrees)
+Do not include any additional text.
+
+Resume text:
+{text}"""
+    try:
+        result = t5_generator(prompt, max_length=1024, truncation=True)
+        output = result[0]['generated_text']
+        try:
+            structured_data = json.loads(output)
+            return structured_data
+        except json.JSONDecodeError:
+            st.error("Generated text is not valid JSON. Falling back to regex extraction.")
+            return generate_json_from_text_fallback(text)
+    except Exception as e:
+        st.error(f"Error during text generation: {e}")
+        return None
+
 def generate_json_from_text_fallback(text):
     """
-    Uses regex to extract basic details from resume text.
-    This fallback extracts email, phone, and assumes the first non-empty line is the name.
-    Skills, experience, and education are left empty for you to improve.
+    Uses regex to extract basic details from resume text as a fallback.
+    Extracts email, phone, and assumes the first non-empty line is the name.
+    Skills, experience, and education are returned as empty lists.
     """
     email_pattern = r"[\w\.-]+@[\w\.-]+\.\w+"
     phone_pattern = r"(\+?\d[\d\s\-\(\)]{7,}\d)"
@@ -46,7 +80,6 @@ def generate_json_from_text_fallback(text):
     email = email_match.group(0) if email_match else ""
     phone = phone_match.group(0) if phone_match else ""
     
-    # Use the first non-empty line as the name
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     name = lines[0] if lines else ""
     
@@ -75,9 +108,20 @@ def search_job_links(skills):
 
 def analyze_skill_gap(skills):
     """Compares extracted skills with required skills for job roles using an API."""
-    # If you have access to an external API for skill gap analysis, you can integrate it here.
-    # For demonstration purposes, we return empty lists.
-    return [], []
+    # For demonstration, this uses a hardcoded API endpoint and key.
+    # Replace these with your own open source solution or API as needed.
+    api_url = "https://api.groq.com/match-jobs"
+    api_key = "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"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    data = {"skills": skills}
+    try:
+        response = requests.post(api_url, json=data, headers=headers)
+        response.raise_for_status()
+        response_data = response.json()
+        return response_data.get("missing_skills", []), response_data.get("suggested_roles", [])
+    except Exception as e:
+        st.error(f"Error fetching skill gap analysis: {e}")
+        return [], []
 
 def suggest_learning_resources(missing_skills):
     """Suggests online courses based on missing skills."""
@@ -100,8 +144,7 @@ if uploaded_file:
         st.subheader("Extracted Resume Text")
         st.text_area("Resume Content", pdf_text, height=300)
         with st.spinner("Generating structured data..."):
-            # Using the regex-based fallback instead of a paid LLM service.
-            structured_data = generate_json_from_text_fallback(pdf_text)
+            structured_data = generate_json_from_text(pdf_text)
         if structured_data:
             st.subheader("📌 Extracted Information")
             st.json(structured_data)
