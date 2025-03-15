@@ -4,9 +4,10 @@ import os
 import numpy as np
 import time
 from typing import List, Dict, Any, Optional
+import streamlit as st
 
 # Constants
-API_KEY = "AIzaSyAtJIlLfcSHpNSKflzuE7jp_egbzkZB6yI"  # Direct 1st API key assignment
+API_KEY = st.secrets["GEMINI_API_KEY"]
 MATCH_THRESHOLD = 0.15  # Define a threshold for matching skills
 API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 EMBED_MODEL = "models/embedding-001"
@@ -140,8 +141,8 @@ from typing import List, Dict, Any
 from utils import generate_gemini_content  # Ensure this is correctly imported
 
 # Replace these with your actual Adzuna credentials
-ADZUNA_APP_ID = "22967e1b"
-ADZUNA_APP_KEY = "5a1a65d458e18127af9240fc50e09658"
+ADZUNA_APP_ID = st.secrets["ADZUNA_APP_ID"]
+ADZUNA_APP_KEY = st.secrets["ADZUNA_APP_KEY"]
 
 def fetch_job_postings(
     job_title: str, 
