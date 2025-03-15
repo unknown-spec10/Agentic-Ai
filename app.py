@@ -3,6 +3,10 @@ import json
 import streamlit as st
 import json
 import os
+if "api_keys" in st.secrets:
+    st.write("API keys are available!")
+else:
+    st.write("API keys are NOT available!")
 from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles
 from skill_analysis import (
     extract_text_from_pdf,
