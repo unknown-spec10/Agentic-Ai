@@ -13,6 +13,15 @@ API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 EMBED_MODEL = "models/embedding-001"
 CONTENT_MODEL = "gemini-1.5-pro-latest"
 
+def get_api_key():
+    return st.secrets.get("GEMINI_API_KEY", "")
+
+def get_adzuna_credentials():
+    return (
+        st.secrets.get("ADZUNA_APP_ID", ""),
+        st.secrets.get("ADZUNA_APP_KEY", "")
+    )
+
 def get_gemini_embedding(text: str) -> List[float]:
     """Generate an embedding for the given text using Gemini API."""
     if not text.strip():
@@ -22,7 +31,7 @@ def get_gemini_embedding(text: str) -> List[float]:
     
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY
+        "x-goog-api-key":  get_api_key()
     }
     
     payload = {
@@ -54,7 +63,7 @@ def generate_gemini_content(prompt: str, max_retries=5) -> Dict[str, Any]:
     api_url = f"{API_BASE_URL}/models/{CONTENT_MODEL}:generateContent"
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY
+        "x-goog-api-key":  get_api_key()
     }
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
@@ -140,10 +149,6 @@ import requests
 from typing import List, Dict, Any
 from utils import generate_gemini_content  # Ensure this is correctly imported
 
-# Replace these with your actual Adzuna credentials
-ADZUNA_APP_ID = st.secrets["ADZUNA_APP_ID"]
-ADZUNA_APP_KEY = st.secrets["ADZUNA_APP_KEY"]
-
 def fetch_job_postings(
     job_title: str, 
     skills: List[str], 
@@ -184,10 +189,13 @@ def fetch_job_postings(
 
     api_url = f"https://api.adzuna.com/v1/api/jobs/us/search/1"
 
+     # Get Adzuna credentials
+    adzuna_id, adzuna_key = get_adzuna_credentials()
+
     # Construct query parameters
     params = {
-        "app_id": ADZUNA_APP_ID,
-        "app_key": ADZUNA_APP_KEY,
+        "app_id": adzuna_id,
+        "app_key": adzuna_key,
         "what": job_title,  # Search for jobs matching this title
         "results_per_page": max_results,
         "content-type": "application/json"
