@@ -3,13 +3,6 @@ import json
 import streamlit as st
 import json
 import os
-
-# Debug API Keys
-st.write("🔥 Debugging API Keys:")
-st.write("GEMINI_API_KEY Loaded:", "GEMINI_API_KEY" in st.secrets)
-st.write("ADZUNA_APP_ID Loaded:", "ADZUNA_APP_ID" in st.secrets)
-st.write("ADZUNA_APP_KEY Loaded:", "ADZUNA_APP_KEY" in st.secrets)
-
 from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles
 from skill_analysis import (
     extract_text_from_pdf,
