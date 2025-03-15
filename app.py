@@ -25,13 +25,13 @@ def cached_extract_resume_details(resume):
     st.sidebar.write(resume_text[:500] if resume_text else "No text extracted")
     return extract_resume_details(resume_text)
     # In your app.py file, after extracting details:
-extracted_details = cached_extract_resume_details(resume)
-resume_skills = extracted_details.get("skills", [])
-if not resume_skills:
-    # Fallback: Use some default skills for testing
-    resume_skills = ["Python", "JavaScript", "Data Analysis"]
-    st.info("No skills detected automatically. Using test skills for demonstration.")
-st.success(f"✅ Extracted {len(resume_skills)} skills from resume.")
+    extracted_details = cached_extract_resume_details(resume)
+    resume_skills = extracted_details.get("skills", [])
+    if not resume_skills:
+        # Fallback: Use some default skills for testing
+        resume_skills = ["Python", "JavaScript", "Data Analysis"]
+        st.info("No skills detected automatically. Using test skills for demonstration.")
+    st.success(f"✅ Extracted {len(resume_skills)} skills from resume.")
 
 @st.cache_data
 def cached_fetch_job_postings(role, skills):
