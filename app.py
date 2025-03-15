@@ -22,12 +22,13 @@ st.subheader("Upload your resume and enter your aspired role to analyze skill ga
 def cached_extract_resume_details(resume):
     resume_text = extract_text_from_pdf(resume)
     return extract_resume_details(resume_text)
-
+    
+    
 if cached_extract_resume_details:
-extracted_details = cached_extract_resume_details(resume)
-st.write("🔍 Extracted Resume Details:", extracted_details)  # Debugging output
-resume_skills = extracted_details.get("skills", [])
-st.write("🔍 Extracted Skills:", resume_skills)  # Check if skills are being extracted
+    extracted_details = cached_extract_resume_details(resume)
+    st.write("🔍 Extracted Resume Details:", extracted_details)  # Debugging output
+    resume_skills = extracted_details.get("skills", [])
+    st.write("🔍 Extracted Skills:", resume_skills)  # Check if skills are being extracted
 
 
 @st.cache_data
