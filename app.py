@@ -21,6 +21,8 @@ st.subheader("Upload your resume and enter your aspired role to analyze skill ga
 @st.cache_data
 def cached_extract_resume_details(resume):
     resume_text = extract_text_from_pdf(resume)
+    st.sidebar.write("Extracted text sample (first 500 chars):")
+    st.sidebar.write(resume_text[:500] if resume_text else "No text extracted")
     return extract_resume_details(resume_text)
 
 @st.cache_data
