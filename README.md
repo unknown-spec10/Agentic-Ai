@@ -95,12 +95,3 @@ This project is a comprehensive career development tool that helps users:
 ### 💾 Storage
 - JSON (Data Storage)
 - File System (Cache)
-
----
-
-## ⚙️ Installation
-
-1. **Clone the repository:**
-```bash
-git clone https://github.com/yourusername/skill-analysis.git
-cd skill-analysis
