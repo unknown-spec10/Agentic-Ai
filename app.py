@@ -193,3 +193,22 @@ st.sidebar.info("💡 Upload your resume and enter an aspired role to analyze sk
 if st.sidebar.button("♻️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
+
+# Footer
+st.markdown("---")
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.markdown(
+        """
+        <div style='text-align: center'>
+            <p>Created and maintained by Deep Podder</p>
+            <a href="https://github.com/unknown-spec10" target="_blank">
+                <img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" style="margin-right: 10px;">
+            </a>
+            <a href="https://www.linkedin.com/in/deeppodder2005" target="_blank">
+                <img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn">
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
