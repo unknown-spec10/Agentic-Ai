@@ -448,62 +448,98 @@ def extract_job_requirements(job_description: str) -> List[str]:
     """Extract required skills from job description."""
     common_skills = {
         'languages': {
-            'python': ['python', 'py'],
-            'java': ['java', 'j2ee', 'spring'],
-            'javascript': ['javascript', 'js', 'es6', 'ecmascript'],
-            'typescript': ['typescript', 'ts'],
-            'c++': ['c++', 'cpp'],
+            'python': ['python', 'py', 'django', 'flask', 'fastapi'],
+            'java': ['java', 'j2ee', 'spring', 'springboot', 'hibernate'],
+            'javascript': ['javascript', 'js', 'es6', 'ecmascript', 'typescript', 'node.js'],
+            'typescript': ['typescript', 'ts', 'angular', 'next.js'],
+            'c++': ['c++', 'cpp', 'stl', 'boost'],
             'go': ['golang', 'go'],
-            'rust': ['rust', 'rustlang']
+            'rust': ['rust', 'cargo']
         },
         'web': {
-            'react': ['react', 'reactjs', 'react.js'],
-            'angular': ['angular', 'angularjs', 'ng'],
-            'vue': ['vue', 'vuejs', 'vue.js'],
-            'node.js': ['node.js', 'nodejs', 'node'],
-            'express': ['express', 'expressjs'],
-            'django': ['django'],
-            'flask': ['flask']
+            'react': ['react', 'reactjs', 'react.js', 'react native', 'redux'],
+            'angular': ['angular', 'angularjs', 'ng', 'angular material'],
+            'vue': ['vue', 'vuejs', 'vue.js', 'vuex', 'nuxt'],
+            'node.js': ['node.js', 'nodejs', 'express', 'nestjs'],
+            'django': ['django', 'drf', 'django rest framework'],
+            'flask': ['flask', 'flask-restful']
         },
         'cloud': {
-            'aws': ['aws', 'amazon web services', 'ec2', 's3', 'lambda'],
-            'azure': ['azure', 'microsoft azure'],
-            'gcp': ['gcp', 'google cloud', 'google cloud platform'],
-            'docker': ['docker', 'containerization'],
-            'kubernetes': ['kubernetes', 'k8s'],
-            'terraform': ['terraform', 'iac']
+            'aws': ['aws', 'amazon web services', 'ec2', 's3', 'lambda', 'cloudformation'],
+            'azure': ['azure', 'microsoft azure', 'azure functions', 'azure devops'],
+            'gcp': ['gcp', 'google cloud', 'app engine', 'cloud run'],
+            'docker': ['docker', 'containerization', 'docker-compose'],
+            'kubernetes': ['kubernetes', 'k8s', 'helm', 'openshift'],
+            'terraform': ['terraform', 'iac', 'infrastructure as code']
         },
         'databases': {
-            'mysql': ['mysql', 'mariadb'],
-            'postgresql': ['postgresql', 'postgres'],
-            'mongodb': ['mongodb', 'mongo'],
-            'redis': ['redis'],
-            'elasticsearch': ['elasticsearch', 'elk']
+            'mysql': ['mysql', 'mariadb', 'sql'],
+            'postgresql': ['postgresql', 'postgres', 'psql'],
+            'mongodb': ['mongodb', 'mongo', 'mongoose'],
+            'redis': ['redis', 'redis cluster'],
+            'elasticsearch': ['elasticsearch', 'elk', 'kibana'],
+            'dynamodb': ['dynamodb', 'aws dynamodb']
         },
         'tools': {
             'git': ['git', 'github', 'gitlab', 'bitbucket'],
-            'jenkins': ['jenkins', 'ci/cd', 'cicd'],
-            'circleci': ['circleci', 'circle-ci'],
-            'travis': ['travis', 'travis-ci'],
-            'jira': ['jira', 'atlassian'],
-            'confluence': ['confluence']
+            'ci_cd': ['jenkins', 'gitlab ci', 'github actions', 'circle ci', 'ci/cd', 'continuous integration'],
+            'monitoring': ['prometheus', 'grafana', 'datadog', 'new relic'],
+            'jira': ['jira', 'confluence', 'agile'],
+            'testing': ['unit testing', 'jest', 'pytest', 'selenium', 'cypress']
+        },
+        'ai_ml': {
+            'machine_learning': ['machine learning', 'ml', 'scikit-learn', 'sklearn'],
+            'deep_learning': ['deep learning', 'neural networks', 'tensorflow', 'pytorch'],
+            'nlp': ['nlp', 'natural language processing', 'transformers'],
+            'data_science': ['data science', 'pandas', 'numpy', 'jupyter']
         }
     }
     
     found_skills = []
     job_description_lower = job_description.lower()
     
-    # Look for skill variations
+    # Look for skill variations with context
     for category, skill_dict in common_skills.items():
         for main_skill, variations in skill_dict.items():
-            if any(variation in job_description_lower for variation in variations):
-                found_skills.append(main_skill.title())
+            # Check for skill mentions with surrounding context
+            for variation in variations:
+                # Look for required/mandatory/essential skills
+                required_patterns = [
+                    f"required.*?{variation}",
+                    f"must have.*?{variation}",
+                    f"essential.*?{variation}",
+                    f"mandatory.*?{variation}",
+                    f"proficient in.*?{variation}",
+                    f"experience with.*?{variation}",
+                    f"knowledge of.*?{variation}",
+                    f"expertise in.*?{variation}",
+                    f"skills:.*?{variation}",
+                    f"requirements:.*?{variation}"
+                ]
+                
+                if any(re.search(pattern, job_description_lower) for pattern in required_patterns):
+                    found_skills.append(main_skill.title())
+                    break  # Break after finding first match for this skill
     
-    # Special case handling
+    # Special case handling for common combinations
     if any(term in job_description_lower for term in ['ci/cd', 'cicd', 'continuous integration', 'continuous deployment']):
         found_skills.append('CI/CD')
-    if any(term in job_description_lower for term in ['cloud', 'saas', 'paas', 'iaas']):
+    if any(term in job_description_lower for term in ['cloud', 'saas', 'paas', 'iaas', 'cloud native']):
         found_skills.append('Cloud')
+    if any(term in job_description_lower for term in ['system design', 'distributed systems', 'scalability']):
+        found_skills.append('System Design')
+    
+    # Add skills mentioned in requirements section
+    requirements_section = re.search(r'requirements?:?(.*?)(?:\n\n|$)', job_description_lower, re.DOTALL)
+    if requirements_section:
+        section_text = requirements_section.group(1)
+        # Look for bullet points or numbered lists
+        skills_list = re.findall(r'(?:•|-|\d+\.)\s*([^•\n]+)', section_text)
+        for skill_text in skills_list:
+            for category, skill_dict in common_skills.items():
+                for main_skill, variations in skill_dict.items():
+                    if any(variation in skill_text.lower() for variation in variations):
+                        found_skills.append(main_skill.title())
     
     return sorted(list(set(found_skills)))
 
