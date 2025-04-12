@@ -1,14 +1,15 @@
 import streamlit as st
 import json
-import streamlit as st
-import json
+import tempfile
 import os
-from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles
+from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles, generate_gemini_content, get_country_code_and_currency, format_salary
 from skill_analysis import (
     extract_text_from_pdf,
     extract_resume_details,
-    analyze_skill_gaps,
-    extract_job_requirements
+    extract_job_requirements,
+    analyze_market_demand,
+    run_skill_gap_analysis,
+    analyze_skill_gaps
 )
 from update_analysis import update_skill_analysis
 
@@ -18,143 +19,177 @@ st.set_page_config(page_title="Skill Gap Analysis & Job Search", layout="wide")
 st.title("🚀 Skill Gap Analysis & Job Search")
 st.subheader("Upload your resume and enter your aspired role to analyze skill gaps and find jobs!")
 
-@st.cache_data
-def cached_extract_resume_details(resume):
-    resume_text = extract_text_from_pdf(resume)
-    return extract_resume_details(resume_text)
-
-@st.cache_data
-def cached_fetch_job_postings(role, skills):
-    return fetch_job_postings(role, skills)
-
-@st.cache_data
-def cached_analyze_skill_gaps(resume_skills, job_skills, job_title):
-    return analyze_skill_gaps(resume_skills, job_skills, job_title)
-
 # User Inputs
-job_title = st.text_input("🔹 Aspired Role", placeholder="Enter aspired job role (e.g., Data Scientist)")
+col1, col2, col3 = st.columns(3)
+with col1:
+    job_title = st.text_input("🔹 Aspired Role", placeholder="Enter aspired job role (e.g., Data Scientist)")
+with col2:
+    location = st.selectbox("📍 Location", 
+                        ["India", "United Kingdom", "United States"],
+                        index=0,
+                        help="Select your target job market")
+with col3:
+    experience_level = st.selectbox(
+        "👨‍💼 Experience Level",
+        ["Fresher", "1 year", "2 years", "3 years", "4 years", "5+ years"],
+        help="Select your overall work experience"
+    )
+
+# Convert experience level to years for calculations
+experience_years = {
+    "Fresher": 0,
+    "1 year": 1,
+    "2 years": 2,
+    "3 years": 3,
+    "4 years": 4,
+    "5+ years": 5
+}
+
 resume = st.file_uploader("📝 Upload Resume (PDF)", type=["pdf"])
 
 if resume and job_title:
     with st.spinner("Processing resume and analyzing skills..."):
-        extracted_details = cached_extract_resume_details(resume)
-        resume_skills = extracted_details.get("skills", [])
-        st.success(f"✅ Extracted {len(resume_skills)} skills from resume.")
-
-        # Recommend Job Roles
-        st.subheader("🔮 Recommended Job Roles")
-        recommended_roles = recommend_job_roles(resume_skills).get("job_recommendations", [])
-        if recommended_roles:
-            selected_role = st.selectbox("📌 Select a recommended job role", recommended_roles)
-        else:
-            st.warning("⚠ No job roles found based on resume skills.")
-            selected_role = None
-
-        # Refresh Recommendations button
-        if st.button("🔄 Refresh Recommendations"):
-            st.experimental_rerun()
-
-        # Extract job-related skills
-        st.info("Fetching required job skills for analysis...")
-        job_skills = extract_job_requirements(job_title)
-        if not job_skills:
-            st.warning("⚠ No job skills found for the given role. Using an empty comparison.")
-
-        # Perform Skill Gap Analysis
-        st.subheader("📊 Skill Gap Analysis")
-        skill_gap_analysis = cached_analyze_skill_gaps(resume_skills, job_skills, job_title)
-        st.write(f"**Match Percentage:** {skill_gap_analysis['match_percentage']:.2f}%")
-
-        # Display Matched Skills
-        if skill_gap_analysis["matched_skills"]:
-            st.write("### ✅ Matched Skills")
-            for match in skill_gap_analysis["matched_skills"]:
-                st.write(f"- {match['job_skill']} (matched with: {match['resume_skill']})")
-        else:
-            st.write("🚫 No matched skills found.")
-
-        # Display Missing Skills
-        if skill_gap_analysis["missing_skills"]:
-            st.write("### ❌ Missing Skills")
-            for skill in skill_gap_analysis["missing_skills"]:
-                st.write(f"- {skill}")
-        else:
-            st.write("🚫 No missing skills found.")
-
-        # Generate Learning Recommendations
-        recommendations = generate_learning_recommendations(skill_gap_analysis["missing_skills"])
-        if recommendations.get("recommendations"):
-            st.write("### 📌 Top Learning Recommendations")
-            for rec in recommendations["recommendations"][:3]:
-                st.write(f"- {rec['skill']}: {rec['course']}")
-
-        # Fetch Job Postings for Aspired Role
-        st.subheader("💼 Job Opportunities for Aspired Role")
-        with st.spinner("Fetching job postings for aspired role..."):
-            job_results = cached_fetch_job_postings(job_title, resume_skills)
-        if job_results and job_results.get("job_matches"):
-            st.success(f"✅ Found {len(job_results['job_matches'])} job listings!")
-            for job in job_results["job_matches"]:
-                with st.expander(f"🔹 {job['title']} at {job['company']}"):
-                    st.write(f"**Location:** {job['location']}")
-                    st.write(f"**Salary Range:** {job['salary_range']}")
-                    st.write(f"**Description:** {job['description'][:200]}...")
-                    st.markdown(f"[Apply Here]({job['application_link']})", unsafe_allow_html=True)
-        else:
-            st.warning("⚠ No job postings found for aspired role.")
-
-        # Fetch Job Postings for Recommended Role
-        if selected_role:
-            selected_role_title = selected_role.get("title", "") if isinstance(selected_role, dict) else selected_role
-            st.subheader(f"💼 Job Opportunities for {selected_role_title}")
-            with st.spinner(f"Fetching job postings for {selected_role_title}..."):
-                recommended_job_results = cached_fetch_job_postings(selected_role_title, resume_skills)
-            if recommended_job_results and recommended_job_results.get("job_matches"):
-                st.success(f"✅ Found {len(recommended_job_results['job_matches'])} job listings for {selected_role_title}!")
-                for job in recommended_job_results["job_matches"]:
-                    with st.expander(f"🔹 {job['title']} at {job['company']}"):
-                        st.write(f"**Location:** {job['location']}")
-                        st.write(f"**Salary Range:** {job['salary_range']}")
-                        st.write(f"**Description:** {job['description'][:200]}...")
-                        st.markdown(f"[Apply Here]({job['application_link']})", unsafe_allow_html=True)
-            else:
-                st.warning(f"⚠ No job postings found for {selected_role_title}.")
-
-    # Update Analysis Section
-    st.subheader("🔄 Refine Analysis")
-    if st.button("Update Analysis"):
-        with st.spinner("Refining your analysis..."):
+        try:
+            # Get years of experience from the selection
+            experience_years_value = experience_years[experience_level]
+            
+            # Save uploaded file to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(resume.getvalue())
+                temp_path = tmp_file.name
+            
             try:
-                update_skill_analysis()  # This updates the analysis and writes to updated_skill_gap_analysis.json
-                with open("updated_skill_gap_analysis.json", "r", encoding="utf-8") as f:
-                    updated_analysis = json.load(f)
-                st.success("✅ Analysis updated successfully!")
-                st.write("### Updated Skill Gap Analysis")
-                st.write(f"**Updated Match Percentage:** {updated_analysis['skill_gap_analysis']['match_percentage']:.2f}%")
-                if updated_analysis["skill_gap_analysis"]["matched_skills"]:
-                    st.write("#### Updated Matched Skills")
-                    for match in updated_analysis["skill_gap_analysis"]["matched_skills"]:
-                        st.write(f"- {match['job_skill']} (matched with: {match['resume_skill']})")
-                else:
-                    st.write("No updated matched skills found.")
-                if updated_analysis["skill_gap_analysis"]["missing_skills"]:
-                    st.write("#### Updated Missing Skills")
-                    for skill in updated_analysis["skill_gap_analysis"]["missing_skills"]:
-                        st.write(f"- {skill}")
-                else:
-                    st.write("No updated missing skills found.")
-                if "job_role_recommendations" in updated_analysis:
-                    st.write("### Updated Recommended Job Roles")
-                    for role in updated_analysis["job_role_recommendations"].get("job_recommendations", []):
-                        st.write(f"- {role.get('title', 'N/A')}: {role.get('description', '')}")
-                if "learning_recommendations" in updated_analysis:
-                    st.write("### Updated Learning Recommendations")
-                    for rec in updated_analysis["learning_recommendations"].get("recommendations", []):
-                        st.write(f"- {rec.get('skill', 'N/A')}: {rec.get('course', '')}")
-            except Exception as e:
-                st.error(f"Error updating analysis: {e}")
+                # Extract text from PDF using the temporary file
+                resume_text = extract_text_from_pdf(temp_path)
+                
+                # Clean up the temporary file
+                os.unlink(temp_path)
+                
+                if not resume_text:
+                    st.error("Could not extract text from the PDF. Please ensure it's a valid, text-based PDF file.")
+                    st.stop()
+                
+                # Extract resume details with experience
+                resume_details = extract_resume_details(resume_text, experience_years_value)
+                resume_skills = resume_details.get("skills", [])
+                st.success(f"✅ Extracted {len(resume_skills)} skills from resume.")
 
+                # Display experience level
+                st.info(f"👨‍💼 Experience Level: {experience_level} ({experience_years_value} year{'s' if experience_years_value != 1 else ''})")
+
+                # Run skill gap analysis
+                analysis_result = run_skill_gap_analysis(
+                    resume_text,
+                    f"{job_title} position requiring expertise in various technologies and frameworks.",
+                    location.lower(),
+                    experience_years_value
+                )
+                
+                # Display results in organized sections
+                st.subheader("📊 Skill Gap Analysis")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Match Percentage", f"{analysis_result['skill_match']:.1f}%")
+                with col2:
+                    st.metric("Experience Level", analysis_result['experience_level'])
+                with col3:
+                    st.metric("Market Trend", analysis_result['market_demand']['trend'])
+
+                # Display Market Insights
+                st.subheader("📈 Market Insights")
+                market_col1, market_col2 = st.columns(2)
+                with market_col1:
+                    st.write("### 🏢 Market Overview")
+                    st.write(f"**Current Trend:** {analysis_result['market_demand']['trend']}")
+                    st.write(f"**Salary Range:** {analysis_result['market_demand']['salary_range']}")
+                    st.write(f"**Experience Level:** {analysis_result['experience_level']}")
+                    st.write(f"**Remote Work:** {analysis_result['market_demand'].get('remote_percentage', 'N/A')} of positions")
+                    
+                    st.write("### 💼 Industry Insights")
+                    industry_descriptions = {
+                        "Enterprise Software Development": "Leading tech companies building enterprise applications and solutions",
+                        "Cloud Services & DevOps": "Companies focused on cloud infrastructure, deployment, and automation",
+                        "FinTech & Banking Technology": "Financial institutions and startups developing digital banking solutions",
+                        "AI/ML & Data Engineering": "Organizations specializing in artificial intelligence and data platforms",
+                        "Cybersecurity & InfoSec": "Companies focused on security solutions and infrastructure protection"
+                    }
+                    for industry in analysis_result['market_demand']['top_industries'][:5]:
+                        st.write(f"- **{industry}**")
+                        if industry in industry_descriptions:
+                            st.write(f"  {industry_descriptions[industry]}")
+                        
+                with market_col2:
+                    st.write("### 📍 Top Locations")
+                    for loc in analysis_result['market_demand']['top_locations'][:5]:
+                        st.write(f"- {loc}")
+                    
+                    st.write("### 🎯 Most Demanded Skills")
+                    for skill in analysis_result['market_demand'].get('top_demanded_skills', [])[:5]:
+                        st.write(f"- {skill}")
+
+                # Display Skill Analysis
+                st.subheader("🔍 Skill Analysis")
+                skill_col1, skill_col2 = st.columns(2)
+                with skill_col1:
+                    st.write("### ✅ Matching Skills")
+                    for skill in analysis_result.get('matching_skills', []):
+                        details = skill['details']
+                        st.write(f"**{skill['name']}**")
+                        st.write(f"- Level: {details['level'].title()}")
+                        st.write(f"- Experience: {details['years']:.1f} years")
+                        if details.get('has_certification'):
+                            st.write("- ✓ Certified")
+                        if details.get('has_leadership'):
+                            st.write("- ✓ Leadership Experience")
+
+                with skill_col2:
+                    st.write("### ❌ Missing Skills")
+                    for skill in analysis_result.get('missing_skills', []):
+                        st.write(f"- {skill}")
+
+                # Job Recommendations
+                st.subheader("💼 Job Recommendations")
+                recommendations = analysis_result.get('recommendations', {}).get('recommended_roles', [])
+                if recommendations:
+                    for job in recommendations:
+                        with st.expander(f"🔹 {job['title']} at {job.get('company', 'Unknown')}"):
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                st.write(f"**Location:** {job['location']}")
+                                st.write(f"**Salary:** {job['avg_salary']}")
+                                st.write(f"**Match Score:** {job['match_score']}%")
+                                st.write(f"**Experience Match:** {job['experience_match']}")
+                            with col2:
+                                st.write("**Required Skills:**")
+                                for skill in job['required_skills']:
+                                    st.write(f"- {skill}")
+                            st.write("**Description:**")
+                            st.write(job.get('description', 'No description available'))
+                            if st.button("Apply Now", key=f"apply_{job['title']}"):
+                                st.markdown(f"[Apply on Job Portal]({job.get('application_link', '#')})")
+
+                # Learning Recommendations
+                if analysis_result.get('missing_skills'):
+                    st.subheader("📚 Learning Recommendations")
+                    learning_paths = analysis_result.get('recommendations', {}).get('learning_paths', [])
+                    if learning_paths:
+                        for path in learning_paths:
+                            with st.expander(f"📘 {path['path']} ({path['duration']})"):
+                                st.write("**Courses:**")
+                                for course in path['courses']:
+                                    st.write(f"- {course}")
+                                st.write(f"**Certification:** {path['certification']}")
+            finally:
+                # Ensure temporary file is cleaned up even if an error occurs
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+            st.write("Please try again or contact support if the issue persists.")
+
+# Sidebar information and cache control
 st.sidebar.info("💡 Upload your resume and enter an aspired role to analyze skill gaps, get job recommendations, and find job listings!")
 if st.sidebar.button("♻️ Clear Cache"):
     st.cache_data.clear()
-    st.experimental_rerun()
+    st.rerun()
