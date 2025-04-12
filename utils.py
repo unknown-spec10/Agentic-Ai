@@ -1,111 +1,208 @@
-import requests
-import json
 import os
-import numpy as np
+import json
 import time
+import numpy as np
+import requests
 from typing import List, Dict, Any, Optional
+from functools import wraps
+from pathlib import Path
+import google.generativeai as genai
+import logging
+from dotenv import load_dotenv, find_dotenv
 import streamlit as st
 
-# Constants
-API_KEY = st.secrets["GEMINI_API_KEY"]
-MATCH_THRESHOLD = 0.15  # Define a threshold for matching skills
-API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+# Force reload of environment variables
+load_dotenv(find_dotenv(), override=True)
+
+# Debug environment variables
+print("Environment variables:")
+print(f"GEMINI_API_KEY present: {'GEMINI_API_KEY' in os.environ}")
+print(f"GEMINI_API_KEY value: {os.getenv('GEMINI_API_KEY')}")
+print(f"Env file location: {find_dotenv()}")
+
+# Configure API key
+API_KEY = st.secrets.get("GEMINI_API_KEY")  # Get API key from Streamlit secrets
+if not API_KEY:
+    raise ValueError("GEMINI_API_KEY secret is not set")
+if API_KEY == "your_gemini_api_key_here":
+    raise ValueError("Please replace the placeholder API key in Streamlit secrets")
+
+API_BASE_URL = "https://generativelanguage.googleapis.com/v1"
 EMBED_MODEL = "models/embedding-001"
-CONTENT_MODEL = "gemini-1.5-pro-latest"
+CONTENT_MODEL = "models/gemini-1.0-pro"
+MATCH_THRESHOLD = 0.7
+CACHE_DIR = Path("cache")
 
-def get_api_key():
-    return st.secrets.get("GEMINI_API_KEY", "")
+# Configure Gemini
+genai.configure(api_key=API_KEY)
 
-def get_adzuna_credentials():
-    return (
-        st.secrets.get("ADZUNA_APP_ID", ""),
-        st.secrets.get("ADZUNA_APP_KEY", "")
-    )
+# Create a cache directory if it doesn't exist
+CACHE_DIR.mkdir(exist_ok=True)
 
-def get_gemini_embedding(text: str) -> List[float]:
-    """Generate an embedding for the given text using Gemini API."""
-    if not text.strip():
-        return []
+def get_cached_embedding(skill: str) -> Optional[List[float]]:
+    """Get embedding from cache if it exists."""
+    if not skill:
+        return None
+        
+    # Create a safe filename from the skill
+    safe_filename = "".join(c for c in skill if c.isalnum()).lower()
+    cache_file = CACHE_DIR / f"emb_{safe_filename}.json"
     
-    api_url = f"{API_BASE_URL}/models/embedding-001:embedContent"
-    
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key":  get_api_key()
-    }
-    
-    payload = {
-        "model": "models/embedding-001",
-        "content": {"parts": [{"text": text}]}
-    }
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'r') as f:
+                cached_data = json.load(f)
+                if isinstance(cached_data, list) and len(cached_data) > 0:
+                    return cached_data
+        except Exception as e:
+            print(f"Error reading cache for {skill}: {e}")
+    return None
 
-    response = None  # ✅ Initialize response to avoid UnboundLocalError
-
+def save_embedding_to_cache(skill: str, embedding: List[float]):
+    """Save embedding to cache."""
+    if not skill or not embedding:
+        return
+        
     try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
-        return response.json().get("embedding", {}).get("values", [])
+        # Create a safe filename from the skill
+        safe_filename = "".join(c for c in skill if c.isalnum()).lower()
+        cache_file = CACHE_DIR / f"emb_{safe_filename}.json"
+        
+        with open(cache_file, 'w') as f:
+            json.dump(embedding, f)
+    except Exception as e:
+        print(f"Error saving cache for {skill}: {e}")
+
+def rate_limit_handler(max_retries=3, initial_delay=5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            delay = initial_delay
+            
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if "429" in str(e):  # Rate limit error
+                        retries += 1
+                        if retries < max_retries:
+                            print(f"Rate limited. Waiting {delay} seconds before retry {retries}/{max_retries}")
+                            time.sleep(delay)
+                            delay *= 2  # Exponential backoff
+                        else:
+                            print("Max retries reached. Please try again later.")
+                            return None
+                    else:
+                        raise e
+            return None
+        return wrapper
+    return decorator
+
+def get_gemini_embedding(text: str, max_retries: int = 5) -> List[float]:
+    base_url = "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent"
+    api_key = os.getenv("GEMINI_API_KEY")
     
-    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-        print(f"Error in get_gemini_embedding: {e}")
-        
-        if response and response.status_code == 429:  # ✅ Ensure response exists before accessing status_code
-            retry_after = int(response.headers.get('Retry-After', 1))
-            print(f"Rate limited. Retrying after {retry_after} seconds")
-            time.sleep(retry_after)
-            return get_gemini_embedding(text)  # Retry once
-        
-        return []
-
-
-def generate_gemini_content(prompt: str, max_retries=5) -> Dict[str, Any]:
-    """Generate content using Gemini API with exponential backoff for rate limiting."""
-    api_url = f"{API_BASE_URL}/models/{CONTENT_MODEL}:generateContent"
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not found")
+    
     headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key":  get_api_key()
+        "Content-Type": "application/json"
     }
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    retry_count = 0
+    data = {
+        "model": "models/embedding-001",
+        "content": {
+            "parts": [{
+                "text": text
+            }]
+        }
+    }
+    
     base_wait_time = 1
     
-    while retry_count <= max_retries:
+    for retry_count in range(max_retries):
         try:
-            response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+            response = requests.post(
+                f"{base_url}?key={api_key}",
+                headers=headers,
+                json=data
+            )
             response.raise_for_status()
-            result = response.json()
-            text_content = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
             
-            # Handle JSON parsing with better error recovery
-            try:
-                if "```json" in text_content:
-                    text_content = text_content.split("```json")[1].split("```")[0].strip()
-                elif "```" in text_content:
-                    json_content = [block for block in text_content.split("```") if block.strip()]
-                    if json_content:
-                        text_content = json_content[0].strip()
-                
-                return json.loads(text_content)
-            except json.JSONDecodeError:
-                print(f"Failed to parse JSON response: {text_content}")
-                return {}
-                
-        except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-            # Handle rate limiting with exponential backoff
-            if hasattr(response, 'status_code') and response.status_code == 429:
-                wait_time = base_wait_time * (2 ** retry_count)
-                print(f"Rate limited. Retrying after {wait_time} seconds (attempt {retry_count+1}/{max_retries+1})")
-                time.sleep(wait_time)
-                retry_count += 1
+            result = response.json()
+            if "embedding" in result:
+                return result["embedding"]["values"]
             else:
-                print(f"Error in generate_gemini_content: {e}")
-                return {}
+                raise ValueError("No embedding values found in response")
                 
-    # If we've exhausted all retries
-    print("Maximum retries reached. Could not complete API request.")
-    return {}
+        except Exception as e:
+            logging.error(f"Error getting embedding on attempt {retry_count + 1}: {str(e)}")
+            if retry_count < max_retries - 1:
+                time.sleep(base_wait_time * (2 ** retry_count))
+                continue
+            raise
 
+def generate_gemini_content(prompt: str, max_retries: int = 5) -> str:
+    """
+    Generate content using the Gemini API with retry logic.
+    
+    Args:
+        prompt (str): The input prompt for content generation
+        max_retries (int): Maximum number of retry attempts
+        
+    Returns:
+        str: Generated content from Gemini API
+    """
+    base_url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+    api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not found")
+    
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "contents": [{
+            "parts": [{
+                "text": prompt
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "topP": 1,
+            "topK": 1,
+            "maxOutputTokens": 2048
+        }
+    }
+    
+    base_wait_time = 1
+    
+    for retry_count in range(max_retries):
+        try:
+            response = requests.post(
+                f"{base_url}?key={api_key}",
+                headers=headers,
+                json=data
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            if "candidates" in result and result["candidates"]:
+                return result["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                raise ValueError("No valid response content found")
+                
+        except Exception as e:
+            logging.error(f"Error on attempt {retry_count + 1}: {str(e)}")
+            if retry_count < max_retries - 1:
+                time.sleep(base_wait_time * (2 ** retry_count))
+                continue
+            raise
+
+@rate_limit_handler(max_retries=3, initial_delay=5)
 def get_industry_benchmarks(job_title: str) -> Dict[str, Any]:
     """
     Generate industry benchmarks for a given job title using AI (Gemini API).
@@ -149,11 +246,45 @@ import requests
 from typing import List, Dict, Any
 from utils import generate_gemini_content  # Ensure this is correctly imported
 
+# Replace these with your actual Adzuna credentials
+ADZUNA_APP_ID = "22967e1b"
+ADZUNA_APP_KEY = "5a1a65d458e18127af9240fc50e09658"
+
+def get_country_code_and_currency(location: str) -> tuple:
+    """
+    Get country code and currency symbol based on location.
+    
+    Args:
+        location (str): Country name
+        
+    Returns:
+        tuple: (country_code, currency_symbol, currency_format)
+    """
+    location_map = {
+        "india": ("in", "₹", "indian"),
+        "united kingdom": ("gb", "£", "british"),
+        "united states": ("us", "$", "us")
+    }
+    return location_map.get(location.lower(), ("in", "₹", "indian"))
+
+def format_salary(amount: float, currency_format: str) -> str:
+    """Format salary based on country's currency format."""
+    if currency_format == "indian":
+        if amount >= 100000:
+            amount_lakhs = amount / 100000
+            return f"₹{amount_lakhs:.2f} L"
+        return f"₹{amount:,.2f}"
+    elif currency_format == "british":
+        return f"£{amount:,.0f}"
+    else:  # US format
+        return f"${amount:,.0f}"
+
+@rate_limit_handler(max_retries=3, initial_delay=5)
 def fetch_job_postings(
     job_title: str, 
     skills: List[str], 
-    location: str = None, 
-    max_results: int = 5,
+    location: str = "india", 
+    max_results: int = 10,
     category: str = None,
     salary_min: int = None,
     salary_max: int = None,
@@ -163,40 +294,27 @@ def fetch_job_postings(
     distance: int = None,
     max_days_old: int = None
 ) -> Dict[str, Any]:
-    """
-    Fetch job postings from Adzuna based on job title, skills, and location.
-    Uses Gemini AI as a fallback if the Adzuna API request fails.
-    
-    Args:
-        job_title (str): The job title to search for
-        skills (List[str]): List of skills the candidate has
-        location (str, optional): Location to search jobs in (city, state, or country)
-        max_results (int, optional): Maximum number of results to return. Defaults to 5.
-        category (str, optional): Job category filter (e.g., "it-jobs", "engineering-jobs")
-        salary_min (int, optional): Minimum salary filter in local currency units
-        salary_max (int, optional): Maximum salary filter in local currency units
-        contract_type (str, optional): Type of employment ("permanent", "contract", "part_time", "full_time")
-        sort_by (str, optional): Sort method ("date", "relevance", "salary")
-        sort_direction (str, optional): Sort order ("up" or "down")
-        distance (int, optional): Search radius in miles/km from the specified location
-        max_days_old (int, optional): Only show jobs posted within the specified number of days
-        
-    Returns:
-        Dict[str, Any]: Dictionary containing job matches
-    """
+    """Fetch job postings from Adzuna based on job title, skills, and location."""
     if not job_title or not skills:
         return {"job_matches": []}
 
-    api_url = f"https://api.adzuna.com/v1/api/jobs/us/search/1"
+    # Get Adzuna credentials from Streamlit secrets
+    app_id = st.secrets.get("ADZUNA_APP_ID")
+    api_key = st.secrets.get("ADZUNA_APP_KEY")
+    
+    if not app_id or not api_key:
+        logging.warning("Adzuna credentials not found in Streamlit secrets")
+        return {"job_matches": []}
 
-     # Get Adzuna credentials
-    adzuna_id, adzuna_key = get_adzuna_credentials()
+    # Get country-specific information
+    country_code, currency_symbol, currency_format = get_country_code_and_currency(location)
+    api_url = f"https://api.adzuna.com/v1/api/jobs/{country_code}/search/1"
 
     # Construct query parameters
     params = {
-        "app_id": adzuna_id,
-        "app_key": adzuna_key,
-        "what": job_title,  # Search for jobs matching this title
+        "app_id": app_id,
+        "app_key": api_key,
+        "what": job_title,
         "results_per_page": max_results,
         "content-type": "application/json"
     }
@@ -204,32 +322,20 @@ def fetch_job_postings(
     # Add optional parameters if provided
     if location:
         params["where"] = location
-    
-    # Add category filtering
     if category:
         params["category"] = category
-    
-    # Add salary range filtering
     if salary_min:
         params["salary_min"] = salary_min
     if salary_max:
         params["salary_max"] = salary_max
-    
-    # Add contract type filtering
     if contract_type:
         params["contract_type"] = contract_type
-    
-    # Add sort options
     if sort_by:
         params["sort_by"] = sort_by
     if sort_direction:
         params["sort_direction"] = sort_direction
-        
-    # Add distance radius
     if distance:
         params["distance"] = distance
-        
-    # Add posting recency filter
     if max_days_old:
         params["max_days_old"] = max_days_old
 
@@ -246,11 +352,11 @@ def fetch_job_postings(
             max_salary = job.get('salary_max')
             
             if min_salary and max_salary:
-                salary_range = f"${min_salary:,} - ${max_salary:,}"
+                salary_range = f"{format_salary(min_salary, currency_format)} - {format_salary(max_salary, currency_format)}"
             elif min_salary:
-                salary_range = f"${min_salary:,}+"
+                salary_range = f"{format_salary(min_salary, currency_format)}+"
             elif max_salary:
-                salary_range = f"Up to ${max_salary:,}"
+                salary_range = f"Up to {format_salary(max_salary, currency_format)}"
             else:
                 salary_range = "Salary not specified"
             
@@ -258,10 +364,10 @@ def fetch_job_postings(
                 "title": job.get("title", "N/A"),
                 "company": job.get("company", {}).get("display_name", "Unknown"),
                 "location": job.get("location", {}).get("display_name", "Unknown"),
-                "match_percentage": 85,  # Placeholder, as Adzuna does not provide match % directly
+                "match_percentage": 85,
                 "salary_range": salary_range,
                 "description": job.get("description", "No description available."),
-                "required_skills": skills,  # Adzuna does not provide skills, so we return input skills
+                "required_skills": skills,
                 "application_link": job.get("redirect_url", "#"),
                 "contract_type": job.get("contract_type", "Not specified"),
                 "category": job.get("category", {}).get("label", "General"),
@@ -279,11 +385,11 @@ def fetch_job_postings(
         category_prompt = f" in the {category} category" if category else ""
         salary_prompt = ""
         if salary_min and salary_max:
-            salary_prompt = f" with salary range ${salary_min:,}-${salary_max:,}"
+            salary_prompt = f" with salary range {format_salary(salary_min, currency_format)}-{format_salary(salary_max, currency_format)}"
         elif salary_min:
-            salary_prompt = f" with minimum salary ${salary_min:,}"
+            salary_prompt = f" with minimum salary {format_salary(salary_min, currency_format)}"
         elif salary_max:
-            salary_prompt = f" with maximum salary ${salary_max:,}"
+            salary_prompt = f" with maximum salary {format_salary(salary_max, currency_format)}"
         contract_prompt = f" for {contract_type} positions" if contract_type else ""
         
         prompt = f"""
@@ -296,7 +402,7 @@ def fetch_job_postings(
               "company": "Company Name",
               "location": "{location if location else 'City, State'}",
               "match_percentage": 85,
-              "salary_range": "$X-$Y",
+              "salary_range": "Salary in {currency_symbol} for {location}",
               "description": "Brief job description",
               "required_skills": ["Skill 1", "Skill 2"],
               "application_link": "https://example.com/job/123",
@@ -311,15 +417,21 @@ def fetch_job_postings(
         return result if "job_matches" in result else {"job_matches": []}
 
 
-def recommend_job_roles(skills: List[str], num_recommendations: int = 5) -> Dict[str, Any]:
-    """Recommend job roles based on the user's current skills"""
+@rate_limit_handler(max_retries=3, initial_delay=5)
+def recommend_job_roles(skills: List[str], location: str = "india", experience_years: float = 0) -> Dict[str, Any]:
+    """Recommend job roles based on the user's current skills and experience level"""
     if not skills:
         return {"job_recommendations": []}
     
     skills_str = ", ".join(skills)
+    
+    # Determine experience level
+    experience_level = "senior" if experience_years >= 5 else "mid" if experience_years >= 2 else "entry"
+    
     prompt = f"""
     Based on these skills: {skills_str}
-    Recommend {num_recommendations} suitable job roles.
+    For someone with {experience_years} years of experience ({experience_level} level)
+    Recommend suitable job roles in {location}.
     
     Return in JSON format:
     {{
@@ -329,7 +441,10 @@ def recommend_job_roles(skills: List[str], num_recommendations: int = 5) -> Dict
           "description": "Brief role description", 
           "match_percentage": 85,
           "key_skills_match": ["Skill 1", "Skill 2"],
-          "additional_skills_needed": ["Skill 3", "Skill 4"]
+          "additional_skills_needed": ["Skill 3", "Skill 4"],
+          "experience_match": "Good/Fair/Excellent",
+          "location": "City, Country",
+          "salary_range": "Salary range based on location and experience"
         }}
       ]
     }}
@@ -337,6 +452,7 @@ def recommend_job_roles(skills: List[str], num_recommendations: int = 5) -> Dict
     result = generate_gemini_content(prompt)
     return result if "job_recommendations" in result else {"job_recommendations": []}
     
+@rate_limit_handler(max_retries=3, initial_delay=5)
 def generate_learning_recommendations(missing_skills: List[str]) -> Dict[str, Any]:
     """Generate personalized learning recommendations based on missing skills."""
     if not missing_skills:
@@ -365,6 +481,7 @@ def generate_learning_recommendations(missing_skills: List[str]) -> Dict[str, An
     result = generate_gemini_content(prompt)
     return result if "recommendations" in result else {"recommendations": []}
 
+@rate_limit_handler(max_retries=3, initial_delay=5)
 def analyze_market_demand(job_title: str) -> Dict[str, Any]:
     """Analyze market demand for a given job role"""
     if not job_title:
@@ -389,6 +506,7 @@ def analyze_market_demand(job_title: str) -> Dict[str, Any]:
         return {"market_demand": {}}
     return result
 
+@rate_limit_handler(max_retries=3, initial_delay=5)
 def suggest_alternative_careers(resume_skills: List[str], aspired_role: str, match_percentage: float) -> Dict[str, Any]:
     """Suggest alternative career paths based on current skills"""
     if match_percentage >= 70 or not resume_skills:
@@ -418,20 +536,35 @@ def suggest_alternative_careers(resume_skills: List[str], aspired_role: str, mat
     return result if "alternatives" in result else {"alternatives": []}
 
 def calculate_skill_similarity(skill1: str, skill2: str) -> float:
-    """Calculate similarity between two skills using embeddings"""
-    embedding1 = get_gemini_embedding(skill1)
-    embedding2 = get_gemini_embedding(skill2)
+    """Calculate similarity between two skills using embeddings."""
+    if not skill1 or not skill2:
+        return 0.0
     
-    if not embedding1 or not embedding2:
-        return 1.0  # Maximum distance (no match)
-    
-    # Convert to numpy arrays
-    vec1 = np.array(embedding1)
-    vec2 = np.array(embedding2)
-    
-    # Calculate Euclidean distance
-    distance = np.linalg.norm(vec1 - vec2)
-    return distance
+    try:
+        embedding1 = get_gemini_embedding(skill1)
+        embedding2 = get_gemini_embedding(skill2)
+        
+        if not embedding1 or not embedding2:
+            return 0.0
+        
+        # Convert to numpy arrays
+        vec1 = np.array(embedding1)
+        vec2 = np.array(embedding2)
+        
+        # Normalize vectors
+        vec1 = vec1 / np.linalg.norm(vec1)
+        vec2 = vec2 / np.linalg.norm(vec2)
+        
+        # Calculate cosine similarity
+        similarity = np.dot(vec1, vec2)
+        
+        # Ensure the result is between 0 and 1
+        similarity = max(0.0, min(1.0, (similarity + 1) / 2))
+        return float(similarity)
+        
+    except Exception as e:
+        print(f"Error calculating similarity between '{skill1}' and '{skill2}': {e}")
+        return 0.0
 
 def generate_career_path(current_role: str, target_role: str) -> Dict[str, Any]:
     """Generate a recommended career path from current to target role"""
@@ -485,3 +618,53 @@ def analyze_interview_readiness(resume_skills: List[str], job_skills: List[str])
     """
     result = generate_gemini_content(prompt)
     return result if "readiness" in result else {"readiness": {}}
+
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """
+    Extract text content from a PDF file.
+    
+    Args:
+        pdf_path (str): Path to the PDF file
+        
+    Returns:
+        str: Extracted text content
+    """
+    try:
+        import PyPDF2
+        with open(pdf_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+            return text.strip()
+    except Exception as e:
+        logging.error(f"Error extracting text from PDF: {str(e)}")
+        raise
+
+def save_to_cache(key: str, data: dict):
+    """
+    Save data to cache file.
+    
+    Args:
+        key (str): Cache key
+        data (dict): Data to cache
+    """
+    cache_file = CACHE_DIR / f"{key}.json"
+    with open(cache_file, 'w') as f:
+        json.dump(data, f)
+
+def load_from_cache(key: str) -> dict:
+    """
+    Load data from cache file.
+    
+    Args:
+        key (str): Cache key
+        
+    Returns:
+        dict: Cached data or None if not found
+    """
+    cache_file = CACHE_DIR / f"{key}.json"
+    if cache_file.exists():
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+    return None
