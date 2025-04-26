@@ -6,7 +6,7 @@ import numpy as np
 import faiss
 import google.generativeai as genai
 import atexit
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, Tuple
 import logging
 import sys
 import requests
@@ -72,6 +72,77 @@ except Exception as e:
     logging.error(f"Error initializing Gemini model: {str(e)}")
     model = None
 
+# Skill aliases for better matching
+skill_aliases = {
+    'javascript': ['js', 'es6', 'ecmascript', 'node.js', 'nodejs', 'typescript'],
+    'python': ['py', 'python3', 'django', 'flask', 'fastapi'],
+    'java': ['core java', 'java se', 'spring', 'springboot'],
+    'react': ['reactjs', 'react.js', 'react native'],
+    'angular': ['angularjs', 'angular2+', 'ng'],
+    'node.js': ['nodejs', 'express.js', 'express'],
+    'aws': ['amazon web services', 'aws cloud', 'amazon cloud'],
+    'docker': ['containerization', 'docker container'],
+    'kubernetes': ['k8s', 'kube', 'kubectl'],
+    'postgresql': ['postgres', 'psql'],
+    'mongodb': ['mongo', 'nosql'],
+    'ci/cd': ['cicd', 'continuous integration', 'continuous deployment'],
+    'git': ['github', 'gitlab', 'version control']
+}
+
+def normalize_skill(skill: str) -> str:
+    """Normalize a skill name for comparison."""
+    try:
+        normalized = skill.lower().strip()
+        normalized = re.sub(r'[^\w\s]', '', normalized)  # Remove special characters
+        normalized = re.sub(r'\s+', '', normalized)      # Remove whitespace
+        return normalized
+    except Exception as e:
+        logging.error(f"Error normalizing skill: {str(e)}")
+        return skill.lower().strip()
+
+def find_skill_match(skill: str, skill_list: List[str]) -> Optional[str]:
+    """Find a matching skill in the list."""
+    try:
+        normalized_skill = normalize_skill(skill)
+        
+        # Direct match first
+        for s in skill_list:
+            if normalize_skill(s) == normalized_skill:
+                return s
+        
+        # Check aliases
+        for main_skill, aliases in skill_aliases.items():
+            if normalized_skill == normalize_skill(main_skill) or \
+               any(normalize_skill(alias) == normalized_skill for alias in aliases):
+                for s in skill_list:
+                    if normalize_skill(s) == normalize_skill(main_skill) or \
+                       any(normalize_skill(alias) == normalize_skill(s) for alias in aliases):
+                        return s
+        
+        # Enhanced fuzzy matching for custom skills
+        for s in skill_list:
+            norm_s = normalize_skill(s)
+            # Check if skills are substrings of each other
+            if normalized_skill in norm_s or norm_s in normalized_skill:
+                return s
+            # Check for common variations
+            if normalized_skill.replace('js', 'javascript') == norm_s or \
+               norm_s.replace('js', 'javascript') == normalized_skill:
+                return s
+            # Handle .js variations
+            if normalized_skill.replace('.js', 'js') == norm_s or \
+               norm_s.replace('.js', 'js') == normalized_skill:
+                return s
+            # Handle hyphenated variations
+            if normalized_skill.replace('-', '') == norm_s or \
+               norm_s.replace('-', '') == normalized_skill:
+                return s
+        
+        return None
+    except Exception as e:
+        logging.error(f"Error finding skill match: {str(e)}")
+        return None
+
 def get_gemini_embedding(text: str) -> List[float]:
     """Generate embedding using a consistent hashing approach."""
     try:
@@ -113,12 +184,13 @@ def get_gemini_embedding(text: str) -> List[float]:
 def get_model():
     """Returns a singleton instance of the model with retry logic."""
     global model
-    if model is None:
-        try:
+    try:
+        if model is None:
             model = genai.GenerativeModel('gemini-pro')
-        except Exception as e:
-            logging.error(f"Failed to initialize model: {str(e)}")
-    return model
+        return model
+    except Exception as e:
+        logging.error(f"Failed to initialize model: {str(e)}")
+        return None
 
 def cleanup_resources():
     """Clean up any resources used during the analysis."""
@@ -138,181 +210,162 @@ def extract_text_from_pdf(file_path: str) -> str:
             text = ""
             for page in pdf_reader.pages:
                 text += page.extract_text()
-            return text
+            return text.strip()
     except Exception as e:
         logging.error(f"Error reading PDF: {str(e)}")
-        return ""
+        raise
 
 def extract_skill_level(text: str, skill: str, variations: List[str], overall_experience: float = 0) -> Dict[str, Any]:
     """Extract skill level and frequency information."""
-    text_lower = text.lower()
-    
-    # Count mentions of the skill and its variations
-    frequency = sum(text_lower.count(var.lower()) for var in variations)
-    
-    # Look for experience indicators
-    experience_patterns = {
-        'expert': [
-            r'\bexpert\s+(?:in\s+|with\s+)?' + skill.lower(),
-            r'\b\d{3,}\+?\s+projects?\s+(?:in|with)\s+' + skill.lower(),
-            r'\b(?:senior|lead|principal)\s+' + skill.lower(),
-            r'\b' + skill.lower() + r'\s+(?:expert|specialist|architect)',
-            r'\badvanced\s+certification\s+(?:in|for)\s+' + skill.lower(),
-            r'\bmentored|trained\s+(?:teams?|others)\s+(?:in|on)\s+' + skill.lower(),
-            r'\bdesigned\s+(?:and|&)\s+implemented\s+.*?' + skill.lower(),
-            r'\barchitected\s+.*?' + skill.lower(),
-            r'\b(?:key|primary)\s+contributor\s+.*?' + skill.lower(),
-            r'\b(?:extensive|comprehensive)\s+experience\s+.*?' + skill.lower()
-        ],
-        'advanced': [
-            r'\badvanced\s+(?:knowledge\s+of\s+)?' + skill.lower(),
-            r'\b(?:extensive|strong)\s+experience\s+(?:in|with)\s+' + skill.lower(),
-            r'\b\d{2}\+?\s+projects?\s+(?:in|with)\s+' + skill.lower(),
-            r'\b(?:developed|implemented|architected)\s+(?:\w+\s+)*' + skill.lower(),
-            r'\bproficient\s+(?:in|with)\s+' + skill.lower(),
-            r'\bsignificant\s+experience\s+(?:in|with)\s+' + skill.lower(),
-            r'\bsuccessfully\s+delivered\s+.*?' + skill.lower(),
-            r'\boptimized\s+.*?' + skill.lower() + r'\s+performance',
-            r'\btroubleshooting\s+.*?' + skill.lower() + r'\s+issues',
-            r'\b(?:led|managed)\s+.*?' + skill.lower() + r'\s+development'
-        ],
-        'intermediate': [
-            r'\bintermediate\s+(?:knowledge\s+of\s+)?' + skill.lower(),
-            r'\bexperience\s+(?:in|with)\s+' + skill.lower(),
-            r'\b(?:worked|familiar)\s+(?:with|on)\s+' + skill.lower(),
-            r'\bcontributed\s+to\s+.*?' + skill.lower(),
-            r'\bparticipated\s+in\s+.*?' + skill.lower(),
-            r'\bused\s+' + skill.lower() + r'\s+(?:for|in)\s+projects?',
-            r'\bknowledge\s+of\s+' + skill.lower(),
-            r'\bunderstanding\s+of\s+' + skill.lower(),
-            r'\bpractical\s+experience\s+(?:in|with)\s+' + skill.lower(),
-            r'\b(?:implemented|developed)\s+.*?' + skill.lower()
-        ],
-        'beginner': [
-            r'\bbasic\s+(?:knowledge\s+of\s+)?' + skill.lower(),
-            r'\bfamiliarity\s+with\s+' + skill.lower(),
-            r'\bexposure\s+to\s+' + skill.lower(),
-            r'\blearning\s+' + skill.lower(),
-            r'\bintroduction\s+to\s+' + skill.lower(),
-            r'\bfundamentals\s+of\s+' + skill.lower(),
-            r'\bstarted\s+(?:learning|working\s+with)\s+' + skill.lower(),
-            r'\bentry[- ]level\s+.*?' + skill.lower(),
-            r'\bcompleted\s+courses?\s+(?:in|on)\s+' + skill.lower(),
-            r'\bbeginning\s+to\s+use\s+.*?' + skill.lower()
-        ]
-    }
-    
-    # Look for years of experience with more variations
-    year_patterns = [
-        r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:experience|work(?:ing)?)\s+(?:with|in|using)\s+' + skill.lower(),
-        r'(?:with|in|using)\s+' + skill.lower() + r'\s+(?:for\s+)?(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)',
-        r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)\s+' + skill.lower() + r'\s+experience',
-        r'(?:since|from)\s+(\d{4})\s+.*?' + skill.lower()  # Match year mentions
-    ]
-    
-    years = 0
-    for pattern in year_patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            try:
-                if len(match.group(1)) == 4:  # Year format (e.g., 2020)
-                    years = datetime.now().year - int(match.group(1))
-                else:
-                    years = float(match.group(1))
-                break
-            except ValueError:
-                continue
-    
-    # If no specific years found for the skill, use a portion of overall experience
-    if years == 0 and overall_experience > 0:
-        years = overall_experience * 0.8  # Assume 80% of overall experience applies to core skills
-    
-    # Determine level based on patterns and years
-    level = 'beginner'
-    max_confidence = 0
-    
-    for potential_level, patterns in experience_patterns.items():
-        # Count how many patterns match
-        matches = sum(1 for pattern in patterns if re.search(pattern, text_lower))
-        confidence = matches / len(patterns)
+    try:
+        text_lower = text.lower()
         
-        if confidence > max_confidence:
-            level = potential_level
-            max_confidence = confidence
-    
-    # Adjust level based on years of experience and frequency
-    if years > 0:
-        if years >= 5 or (years >= 3 and frequency >= 5):
-            level = 'expert'
-        elif years >= 3 or (years >= 2 and frequency >= 4):
-            level = 'advanced'
-        elif years >= 1 or frequency >= 3:
-            level = 'intermediate'
-    
-    # Look for certifications with more variations
-    cert_patterns = [
-        r'(?:certification|certified|certificate)\s+(?:in|for)\s+' + skill.lower(),
-        r'(?:' + skill.lower() + r')\s+(?:certification|certified|certificate)',
-        r'(?:aws|microsoft|google|oracle)\s+certified\s+.*?' + skill.lower(),
-        r'(?:professional|associate)\s+certification\s+.*?' + skill.lower()
-    ]
-    has_certification = any(re.search(pattern, text_lower) for pattern in cert_patterns)
-    
-    # Look for project leadership with more variations
-    leadership_patterns = [
-        r'(?:led|managed|directed)\s+(?:team|project|initiative)\s+.*?' + skill.lower(),
-        r'(?:team\s+lead|project\s+manager|tech\s+lead)\s+.*?' + skill.lower(),
-        r'(?:architected|designed)\s+.*?' + skill.lower() + r'\s+solution',
-        r'(?:mentored|trained)\s+(?:team|others)\s+(?:in|on)\s+' + skill.lower()
-    ]
-    has_leadership = any(re.search(pattern, text_lower) for pattern in leadership_patterns)
-    
-    return {
-        "level": level,
-        "years": years,
-        "frequency": frequency,
-        "has_certification": has_certification,
-        "has_leadership": has_leadership,
-        "confidence": max_confidence,
-        "weight": calculate_skill_weight(level, years, frequency, has_certification, has_leadership, max_confidence, overall_experience)
-    }
+        # For custom skills, create variations based on common patterns
+        if not variations:
+            skill_lower = skill.lower()
+            variations = [
+                skill_lower,
+                skill_lower.replace(' ', ''),
+                skill_lower.replace('-', ''),
+                skill_lower.replace('.', ''),
+                f"{skill_lower} framework",
+                f"{skill_lower} tool",
+                f"{skill_lower} technology"
+            ]
+        
+        # Count mentions of the skill and its variations
+        frequency = sum(text_lower.count(var.lower()) for var in variations)
+        
+        # Look for experience indicators
+        experience_patterns = {
+            'expert': [
+                r'\bexpert\s+(?:in\s+|with\s+)?' + skill.lower(),
+                r'\b\d{3,}\+?\s+projects?\s+(?:in|with)\s+' + skill.lower(),
+                r'\b(?:senior|lead|principal)\s+' + skill.lower(),
+                r'\b' + skill.lower() + r'\s+(?:expert|specialist|architect)',
+                r'\badvanced\s+certification\s+(?:in|for)\s+' + skill.lower()
+            ],
+            'advanced': [
+                r'\badvanced\s+(?:knowledge\s+of\s+)?' + skill.lower(),
+                r'\b(?:extensive|strong)\s+experience\s+(?:in|with)\s+' + skill.lower(),
+                r'\b\d{2}\+?\s+projects?\s+(?:in|with)\s+' + skill.lower(),
+                r'\bproficient\s+(?:in|with)\s+' + skill.lower()
+            ],
+            'intermediate': [
+                r'\bintermediate\s+(?:knowledge\s+of\s+)?' + skill.lower(),
+                r'\bexperience\s+(?:in|with)\s+' + skill.lower(),
+                r'\b(?:worked|familiar)\s+(?:with|on)\s+' + skill.lower(),
+                r'\bused\s+' + skill.lower() + r'\s+(?:for|in)\s+projects?'
+            ],
+            'beginner': [
+                r'\bbasic\s+(?:knowledge\s+of\s+)?' + skill.lower(),
+                r'\bfamiliar\s+(?:with)?\s+' + skill.lower(),
+                r'\bexposure\s+to\s+' + skill.lower(),
+                r'\blearning\s+' + skill.lower()
+            ]
+        }
+        
+        # Find the highest level that matches
+        level = 'beginner'
+        max_confidence = 0.4  # Default confidence
+        
+        for level_name, patterns in experience_patterns.items():
+            matches = sum(bool(re.search(pattern, text_lower)) for pattern in patterns)
+            if matches > 0:
+                confidence = min(matches / len(patterns) + 0.2, 1.0)  # Base confidence on match ratio
+                if confidence > max_confidence:
+                    level = level_name
+                    max_confidence = confidence
+        
+        # Extract years of experience
+        years_patterns = [
+            rf'(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s+(?:of\s+)?(?:experience\s+(?:in|with)\s+)?{skill.lower()}',
+            rf'{skill.lower()}\s+(?:experience|expertise)\s+(?:of\s+)?(\d+(?:\.\d+)?)\s*(?:years?|yrs?)',
+            rf'worked\s+(?:with|on)\s+{skill.lower()}\s+for\s+(\d+(?:\.\d+)?)\s*(?:years?|yrs?)'
+        ]
+        
+        years = 0
+        for pattern in years_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                try:
+                    years = float(match.group(1))
+                    break
+                except ValueError:
+                    continue
+        
+        # If no specific years found, estimate based on level and frequency
+        if years == 0:
+            if level == 'expert':
+                years = min(overall_experience, 5) if overall_experience > 0 else 5
+            elif level == 'advanced':
+                years = min(overall_experience, 3) if overall_experience > 0 else 3
+            elif level == 'intermediate':
+                years = min(overall_experience, 2) if overall_experience > 0 else 2
+            else:
+                years = min(overall_experience, 1) if overall_experience > 0 else 0.5
+        
+        # Look for certifications
+        cert_patterns = [
+            r'certified\s+.*?' + skill.lower(),
+            r'certification\s+.*?' + skill.lower(),
+            r'(?:professional|associate)\s+certification\s+.*?' + skill.lower()
+        ]
+        has_certification = any(re.search(pattern, text_lower) for pattern in cert_patterns)
+        
+        # Look for project leadership with more variations
+        leadership_patterns = [
+            r'(?:led|managed|directed)\s+(?:team|project|initiative)\s+.*?' + skill.lower(),
+            r'(?:team\s+lead|project\s+manager|tech\s+lead)\s+.*?' + skill.lower(),
+            r'(?:architected|designed)\s+.*?' + skill.lower() + r'\s+solution',
+            r'(?:mentored|trained)\s+(?:team|others)\s+(?:in|on)\s+' + skill.lower()
+        ]
+        has_leadership = any(re.search(pattern, text_lower) for pattern in leadership_patterns)
+        
+        return {
+            "level": level,
+            "years": years,
+            "frequency": frequency,
+            "has_certification": has_certification,
+            "has_leadership": has_leadership,
+            "confidence": max_confidence,
+            "weight": calculate_skill_weight(level, years, frequency, has_certification, has_leadership, max_confidence, overall_experience)
+        }
+    except Exception as e:
+        logging.error(f"Error extracting skill level: {str(e)}")
+        return {
+            "level": "beginner",
+            "years": 0,
+            "frequency": 0,
+            "has_certification": False,
+            "has_leadership": False,
+            "confidence": 0.4,
+            "weight": 0.4
+        }
 
 def calculate_skill_weight(level: str, years: float, frequency: int, has_certification: bool, has_leadership: bool, confidence: float, overall_experience: float = 0) -> float:
     """Calculate a weighted score for a skill based on multiple factors."""
-    # Base weights for each level
-    level_weights = {
-        'expert': 1.0,
-        'advanced': 0.8,
-        'intermediate': 0.6,
-        'beginner': 0.4
-    }
-    
-    # Start with base weight from level
-    weight = level_weights.get(level, 0.4)
-    
-    # Add weight for years of experience (logarithmic scale to prevent overweighting)
-    # Max contribution of 0.4 from years, reaching 95% of max at 10 years
-    years_weight = 0.4 * (1 - math.exp(-years/5))
-    
-    # Add weight for frequency of mention (diminishing returns)
-    # Max contribution of 0.2 from frequency
-    frequency_weight = 0.2 * (1 - math.exp(-frequency/10))
-    
-    # Add weight for certifications and leadership
-    cert_weight = 0.2 if has_certification else 0
-    leadership_weight = 0.2 if has_leadership else 0
-    
-    # Factor in overall experience (small boost for experienced professionals)
-    experience_boost = min(0.1 * (overall_experience / 5), 0.2)  # Max 20% boost for 10+ years
-    
-    # Factor in confidence of level detection
-    confidence_factor = 0.5 + (0.5 * confidence)  # Range: 0.5 to 1.0
-    
-    # Combine weights with confidence factor and experience boost
-    total_weight = (weight + years_weight + frequency_weight + cert_weight + leadership_weight + experience_boost) * confidence_factor
-    
-    # Ensure weight stays in [0, 1] range
-    return round(min(max(total_weight, 0), 1), 2)
+    try:
+        level_weights = {
+            'expert': 1.0,
+            'advanced': 0.8,
+            'intermediate': 0.6,
+            'beginner': 0.4
+        }
+        
+        weight = level_weights.get(level, 0.4)
+        years_weight = 0.4 * (1 - math.exp(-years/5))
+        frequency_weight = 0.2 * (1 - math.exp(-frequency/10))
+        cert_weight = 0.2 if has_certification else 0
+        leadership_weight = 0.2 if has_leadership else 0
+        experience_boost = min(0.1 * (overall_experience / 5), 0.2)
+        confidence_factor = 0.5 + (0.5 * confidence)
+        
+        total_weight = (weight + years_weight + frequency_weight + cert_weight + leadership_weight + experience_boost) * confidence_factor
+        return round(min(max(total_weight, 0), 1), 2)
+    except Exception as e:
+        logging.error(f"Error calculating skill weight: {str(e)}")
+        return 0.4
 
 def extract_resume_details(text: str, overall_experience: float = 0) -> Dict[str, Any]:
     """Extract skills and other details from resume text."""
@@ -543,64 +596,136 @@ def extract_job_requirements(job_description: str) -> List[str]:
     
     return sorted(list(set(found_skills)))
 
-def analyze_skill_gaps(resume_details: Dict[str, Any], job_skills: List[str], job_title: str) -> Dict[str, Any]:
-    """Analyze gaps between resume skills and job requirements."""
-    logging.info("Starting skill gap analysis...")
+def analyze_skill_gaps(resume_details: Union[Dict[str, Any], List[str]], job_skills: List[str]) -> Dict[str, Any]:
+    """
+    Analyze gaps between resume skills and job requirements.
+    Args:
+        resume_details: Dictionary containing resume details or list of skills
+        job_skills: List of required skills from job description
+    Returns:
+        Dictionary containing matching and missing skills with analysis
+    """
+    logging.info("Starting skill gap analysis")
     
-    # Handle both dictionary and list inputs
-    if isinstance(resume_details, list):
-        # Convert list to dictionary format
-        resume_details = {
-            "skills": resume_details,
-            "skill_details": {skill: {
-                "level": "beginner",
-                "years": 0,
-                "frequency": 1,
-                "has_certification": False,
-                "has_leadership": False,
-                "confidence": 0,
-                "weight": 0.2
-            } for skill in resume_details}
-        }
-    
-    # Convert job skills to lowercase for comparison
-    job_skills_lower = set(s.lower() for s in job_skills)
-    resume_skills_lower = {s.lower(): details for s, details in resume_details.get("skill_details", {}).items()}
-    
-    # Find matching and missing skills
-    matching_skills = []
-    missing_skills = []
-    
-    for job_skill in job_skills:
-        job_skill_lower = job_skill.lower()
-        if job_skill_lower in resume_skills_lower:
-            skill_info = {
-                "name": job_skill,
-                "details": resume_skills_lower[job_skill_lower]
-            }
-            matching_skills.append(skill_info)
+    try:
+        # Convert job skills to lowercase for comparison
+        job_skills = [skill.lower() for skill in job_skills]
+        
+        # Extract skills from resume
+        if isinstance(resume_details, dict):
+            resume_skills = resume_details.get('skills', [])
+            skill_details = resume_details.get('skill_details', {})
+            if isinstance(resume_skills, str):
+                resume_skills = [resume_skills]
         else:
-            missing_skills.append(job_skill)
-    
-    # Calculate weighted match percentage
-    if not job_skills:
-        match_percentage = 100.0
-    else:
-        total_weight = len(job_skills)  # Each required skill has base weight of 1
-        matched_weight = sum(skill["details"]["weight"] for skill in matching_skills)
-        match_percentage = (matched_weight / total_weight) * 100
-    
-    # Sort matching skills by weight
-    matching_skills.sort(key=lambda x: (-x["details"]["weight"], x["name"]))
-    
-    logging.info(f"Skill gap analysis completed. Match percentage: {match_percentage}%")
-    
-    return {
-        "job_title": job_title,
-        "match_percentage": round(match_percentage, 2),
-        "matching_skills": matching_skills,
-        "missing_skills": sorted(missing_skills)
-    }
+            resume_skills = resume_details
+            skill_details = {}
+        
+        resume_skills = [skill.lower() for skill in resume_skills]
+        
+        # Get market demanded skills for the role
+        market_skills = [
+            "python", "javascript", "java", "sql", "aws",
+            "react", "angular", "node.js", "docker", "kubernetes",
+            "devops", "ci/cd", "agile", "cloud", "system design"
+        ]
+        
+        # Find matching and missing skills
+        matching_skills = []
+        missing_skills = []
+        
+        # Combined required skills (job requirements + market demands)
+        all_required_skills = list(set(job_skills + [skill.lower() for skill in market_skills]))
+        
+        for required_skill in all_required_skills:
+            skill_found = False
+            
+            # Check for exact matches first
+            if required_skill in resume_skills:
+                # Get the original case version of the skill
+                original_skill = next((s for s in resume_details.get('skills', []) if s.lower() == required_skill), required_skill.title())
+                skill_info = {
+                    'name': original_skill,
+                    'details': skill_details.get(original_skill, {
+                        'level': 'intermediate',
+                        'years': 0,
+                        'has_certification': False,
+                        'has_leadership': False
+                    }),
+                    'source': 'job' if required_skill in job_skills else 'market'
+                }
+                matching_skills.append(skill_info)
+                skill_found = True
+            
+            # Check for variations and synonyms if not found
+            if not skill_found:
+                # Special case for CI/CD
+                if required_skill in ['ci/cd', 'ci-cd', 'cicd']:
+                    ci_cd_terms = ['jenkins', 'gitlab ci', 'github actions', 'travis ci', 'circleci', 'azure pipelines']
+                    if any(term in resume_skills for term in ci_cd_terms):
+                        matching_skills.append({
+                            'name': 'CI/CD',
+                            'details': {'level': 'intermediate', 'years': 0},
+                            'source': 'job' if required_skill in job_skills else 'market'
+                        })
+                        skill_found = True
+                
+                # Special case for Cloud
+                if required_skill == 'cloud':
+                    cloud_terms = ['aws', 'azure', 'gcp', 'google cloud', 'cloud computing']
+                    if any(term in resume_skills for term in cloud_terms):
+                        matching_skills.append({
+                            'name': 'Cloud',
+                            'details': {'level': 'intermediate', 'years': 0},
+                            'source': 'job' if required_skill in job_skills else 'market'
+                        })
+                        skill_found = True
+                
+                # Special case for System Design
+                if required_skill in ['system design', 'systems design']:
+                    design_terms = ['distributed systems', 'scalable systems', 'microservices', 'system architecture']
+                    if any(term in resume_skills for term in design_terms):
+                        matching_skills.append({
+                            'name': 'System Design',
+                            'details': {'level': 'intermediate', 'years': 0},
+                            'source': 'job' if required_skill in job_skills else 'market'
+                        })
+                        skill_found = True
+            
+            if not skill_found:
+                missing_skills.append({
+                    'name': required_skill.title(),
+                    'source': 'job' if required_skill in job_skills else 'market'
+                })
+        
+        # Calculate match percentage (based on job requirements only)
+        total_required = len(job_skills)
+        total_matching = len([skill for skill in matching_skills if skill['source'] == 'job'])
+        match_percentage = (total_matching / total_required * 100) if total_required > 0 else 0
+        
+        result = {
+            "matching_skills": matching_skills,
+            "missing_skills": missing_skills,
+            "match_percentage": round(match_percentage, 2),
+            "total_required_skills": total_required,
+            "total_matching_skills": total_matching,
+            "analysis_summary": f"Found {total_matching} out of {total_required} required skills ({round(match_percentage, 2)}% match)"
+        }
+        
+        logging.info(f"Skill gap analysis completed: {result['analysis_summary']}")
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error in skill gap analysis: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return {
+            "matching_skills": [],
+            "missing_skills": job_skills,
+            "match_percentage": 0,
+            "total_required_skills": len(job_skills),
+            "total_matching_skills": 0,
+            "analysis_summary": "Error occurred during skill gap analysis"
+        }
 
 def api_call_with_retry(url: str, params: dict, max_retries: int = 3) -> Optional[dict]:
     """Make API call with retry logic and exponential backoff."""
@@ -618,343 +743,105 @@ def api_call_with_retry(url: str, params: dict, max_retries: int = 3) -> Optiona
                 time.sleep(2 ** attempt)
     return None
 
-def get_country_code_and_currency(location: str) -> tuple:
-    """
-    Get country code and currency symbol based on location.
+def normalize_country(location: str) -> str:
+    """Normalize country name for consistent lookup."""
+    location = location.lower().strip()
+    if 'united states' in location or 'usa' in location:
+        return 'united states'
+    elif 'united kingdom' in location or 'uk' in location:
+        return 'united kingdom'
+    elif 'india' in location:
+        return 'india'
+    return location
+
+def get_country_code_and_currency(location: str) -> Tuple[str, str, str]:
+    """Get country code and currency information based on location."""
+    location = location.lower()
+    normalized_country = normalize_country(location)
     
-    Args:
-        location (str): Country name
-        
-    Returns:
-        tuple: (country_code, currency_symbol, currency_format)
-    """
-    location_map = {
-        "india": ("in", "₹", "indian"),
-        "united kingdom": ("gb", "£", "british"),
-        "united states": ("us", "$", "us")
+    country_info = {
+        'india': ('in', '₹', '{:,.0f}'),
+        'united states': ('us', '$', '${:,.0f}'),
+        'united kingdom': ('gb', '£', '£{:,.0f}'),
+        'canada': ('ca', 'C$', 'C${:,.0f}'),
+        'australia': ('au', 'A$', 'A${:,.0f}'),
+        'germany': ('de', '€', '€{:,.0f}'),
+        'france': ('fr', '€', '€{:,.0f}'),
+        'netherlands': ('nl', '€', '€{:,.0f}'),
+        'singapore': ('sg', 'S$', 'S${:,.0f}'),
+        'japan': ('jp', '¥', '¥{:,.0f}')
     }
-    return location_map.get(location.lower(), ("in", "₹", "indian"))
+    
+    return country_info.get(normalized_country, ('in', '₹', '{:,.0f}'))
 
 def format_salary(amount: float, currency_format: str) -> str:
-    """
-    Format salary based on country's currency format.
-    
-    Args:
-        amount (float): Salary amount
-        currency_format (str): Currency format type
-        
-    Returns:
-        str: Formatted salary string
-    """
-    if currency_format == "indian":
-        # Convert to Indian format (lakhs)
-        if amount >= 100000:
-            amount_lakhs = amount / 100000
-            return f"₹{amount_lakhs:.2f} L"
-        return f"₹{amount:,.2f}"
-    elif currency_format == "british":
-        return f"£{amount:,.0f}"
-    else:  # US format
-        return f"${amount:,.0f}"
-
-def analyze_market_demand(job_title: str, location: str = "india", experience_years: float = 0) -> Dict[str, Any]:
-    """Analyze market demand for the job title using Adzuna API with experience-based insights."""
-    logging.info(f"Analyzing market demand for {job_title} in {location} with {experience_years} years of experience")
-    
+    """Format salary according to currency format."""
     try:
-        app_id = os.getenv('ADZUNA_APP_ID')
-        api_key = os.getenv('ADZUNA_API_KEY')
-        
-        if not app_id or not api_key:
-            logging.warning("Adzuna credentials not found, using fallback data")
-            return get_default_market_demand(location, experience_years)
-        
-        # Get country-specific information
-        country_code, currency_symbol, currency_format = get_country_code_and_currency(location)
-        
-        # Get market statistics from Adzuna
-        base_url = "https://api.adzuna.com/v1/api"
-        
-        # Generate search variations based on job title and experience
-        experience_level = "entry" if experience_years < 2 else "mid" if experience_years < 5 else "senior"
-        search_variations = [
-            f"{experience_level} {job_title}",
-            f"{job_title}",
-            f"{experience_level} {job_title.replace('Developer', 'Engineer')}",
-            f"{experience_level} {job_title.split()[0]} Developer",
-            f"{experience_level} {job_title.split()[0]} Engineer"
-        ]
-        
-        all_jobs = []
-        seen_jobs = set()  # Track unique job IDs
-        
-        # Search with multiple variations
-        for search_term in search_variations:
-            params = {
-                "app_id": app_id,
-                "app_key": api_key,
-                "what": search_term.strip(),
-                "where": location,
-                "max_days_old": 60,
-                "sort_by": "date",
-                "full_time": 1,
-                "results_per_page": 100
-            }
-            
-            data = api_call_with_retry(f"{base_url}/jobs/{country_code}/search/1", params)
-            if data and 'results' in data:
-                # Add only unique jobs
-                for job in data['results']:
-                    job_id = job.get('id')
-                    if job_id and job_id not in seen_jobs:
-                        all_jobs.append(job)
-                        seen_jobs.add(job_id)
-        
-        if not all_jobs:
-            logging.warning("No jobs found in API response")
-            return get_default_market_demand(location, experience_years)
-        
-        # Calculate salary ranges with outlier detection
-        salaries = [job.get('salary_min', 0) for job in all_jobs if job.get('salary_min', 0) > 0]
-        if salaries:
-            # Remove outliers using IQR method
-            q1 = np.percentile(salaries, 25)
-            q3 = np.percentile(salaries, 75)
-            iqr = q3 - q1
-            lower_bound = q1 - (1.5 * iqr)
-            upper_bound = q3 + (1.5 * iqr)
-            filtered_salaries = [s for s in salaries if lower_bound <= s <= upper_bound]
-            
-            if filtered_salaries:
-                min_salary = min(filtered_salaries)
-                max_salary = max(filtered_salaries)
-                avg_salary = sum(filtered_salaries) / len(filtered_salaries)
-                
-                # Adjust salary range based on experience
-                if experience_years >= 5:
-                    min_salary = avg_salary * 1.2
-                    max_salary = max_salary * 1.3
-                elif experience_years >= 3:
-                    min_salary = avg_salary * 0.9
-                    max_salary = max_salary * 1.1
-                
-                salary_range = f"{format_salary(min_salary, currency_format)} - {format_salary(max_salary, currency_format)}"
-            else:
-                salary_range = get_default_market_demand(location, experience_years)["salary_range"]
-        else:
-            salary_range = get_default_market_demand(location, experience_years)["salary_range"]
-        
-        # Extract industries and locations with improved categorization
-        industries = {}
-        locations = {}
-        skills_demand = {}
-        remote_count = 0
-        tech_stack_mentions = {}
-        
-        for job in all_jobs:
-            # Count industries with subcategories
-            category = job.get('category', {}).get('label', 'Technology')
-            subcategory = job.get('category', {}).get('tag', '')
-            industry_key = f"{category} - {subcategory}" if subcategory else category
-            industries[industry_key] = industries.get(industry_key, 0) + 1
-            
-            # Enhanced location tracking
-            job_location = job.get('location', {}).get('display_name', '')
-            if job_location:
-                locations[job_location] = locations.get(job_location, 0) + 1
-            
-            # Improved remote work detection
-            description = job.get('description', '').lower()
-            if any(term in description for term in [
-                'remote', 'work from home', 'wfh', 'virtual', 'telecommute',
-                'anywhere', 'flexible location', 'remote-first', 'fully remote'
-            ]):
-                remote_count += 1
-            
-            # Enhanced skill detection
-            for skill in common_tech_skills:
-                if skill.lower() in description:
-                    skills_demand[skill] = skills_demand.get(skill, 0) + 1
-            
-            # Track technology stack mentions
-            tech_stack = extract_tech_stack(description)
-            for tech in tech_stack:
-                tech_stack_mentions[tech] = tech_stack_mentions.get(tech, 0) + 1
-        
-        # Calculate trends and insights
-        current_count = len(all_jobs)
-        trend = "Growing" if current_count > 50 else "Stable" if current_count > 20 else "Limited"
-        remote_percentage = int((remote_count / current_count) * 100) if current_count > 0 else 0
-        
-        # Sort and get top results
-        top_industries = sorted(industries.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_locations = sorted(locations.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_skills = sorted(skills_demand.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_tech_stack = sorted(tech_stack_mentions.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        return {
-            "trend": trend,
-            "trend_description": f"Found {current_count} active job postings in the last 60 days",
-            "salary_range": salary_range,
-            "top_industries": [ind[0] for ind in top_industries],
-            "top_locations": [loc[0] for loc in top_locations],
-            "top_demanded_skills": [skill[0] for skill in top_skills],
-            "top_tech_stack": [tech[0] for tech in top_tech_stack],
-            "future_outlook": "Positive" if trend == "Growing" else "Stable" if trend == "Stable" else "Competitive",
-            "total_jobs": current_count,
-            "remote_percentage": f"{remote_percentage}%",
-            "experience_level": experience_level.title(),
-            "market_insights": {
-                "competition_level": "High" if current_count > 100 else "Medium" if current_count > 50 else "Low",
-                "best_time_to_apply": "Current market is actively hiring" if trend == "Growing" else "Consider upskilling first",
-                "salary_insights": f"Salary range for {experience_years} years experience in {location}",
-                "remote_work_availability": "High" if remote_percentage > 50 else "Medium" if remote_percentage > 25 else "Low",
-                "market_maturity": "Mature" if current_count > 200 else "Growing" if current_count > 50 else "Emerging",
-                "tech_stack_diversity": len(tech_stack_mentions)
-            }
-        }
-        
+        return currency_format.format(amount)
     except Exception as e:
-        logging.error(f"Error in market demand analysis: {str(e)}")
-        logging.error(f"Traceback: {traceback.format_exc()}")
-        return get_default_market_demand(location, experience_years)
+        logging.error(f"Error formatting salary: {str(e)}")
+        return str(amount)
 
-def extract_tech_stack(description: str) -> List[str]:
-    """Extract technology stack mentions from job description."""
-    tech_patterns = {
-        'frontend': ['react', 'angular', 'vue', 'javascript', 'typescript', 'html', 'css'],
-        'backend': ['node', 'python', 'java', 'go', 'ruby', 'php', 'scala', 'c#'],
-        'database': ['sql', 'mongodb', 'postgresql', 'mysql', 'redis', 'elasticsearch'],
-        'cloud': ['aws', 'azure', 'gcp', 'cloud'],
-        'devops': ['docker', 'kubernetes', 'jenkins', 'gitlab', 'github actions'],
-        'testing': ['jest', 'cypress', 'selenium', 'pytest', 'junit'],
-        'tools': ['git', 'jira', 'confluence', 'slack', 'teams']
-    }
-    
-    found_tech = []
-    description_lower = description.lower()
-    
-    for category, technologies in tech_patterns.items():
-        for tech in technologies:
-            if tech in description_lower:
-                found_tech.append(tech)
-    
-    return found_tech
-
-def normalize_country(country: str) -> str:
-    """Normalize country name to standard format."""
-    country_map = {
-        # India variations
-        "india": "india",
-        "in": "india",
-        "ind": "india",
-        # UK variations
-        "uk": "uk",
-        "united kingdom": "uk",
-        "britain": "uk",
-        "gb": "uk",
-        # US variations
-        "us": "us",
-        "usa": "us",
-        "united states": "us",
-        "america": "us"
-    }
-    return country_map.get(country.lower().strip(), "india")  # Default to India if unknown
-
-def get_default_locations(country: str = "india") -> List[str]:
-    """
-    Returns a list of major IT hubs based on the country.
-    
-    Args:
-        country (str): Country name (india, uk, or us)
-        
-    Returns:
-        List[str]: List of major IT hub locations
-    """
-    normalized_country = normalize_country(country)
-    
+def get_default_locations(country: str) -> List[str]:
+    """Get default locations based on country."""
     locations = {
-        "india": [
-            "Bangalore", "Mumbai", "Delhi NCR", "Hyderabad", "Pune",
-            "Chennai", "Kolkata", "Ahmedabad", "Chandigarh", "Kochi",
-            "Noida", "Gurgaon", "Coimbatore", "Indore", "Thiruvananthapuram"
-        ],
-        "uk": [
-            "London", "Manchester", "Birmingham", "Edinburgh", "Bristol",
-            "Glasgow", "Leeds", "Cambridge", "Oxford", "Reading",
-            "Cardiff", "Belfast", "Newcastle", "Liverpool", "Brighton"
-        ],
-        "us": [
-            "San Francisco Bay Area", "Seattle", "New York City", "Boston", "Austin",
-            "Los Angeles", "Denver", "Chicago", "Washington DC", "Portland",
-            "San Diego", "Atlanta", "Raleigh-Durham", "Miami", "Salt Lake City"
-        ]
+        'india': ['Bangalore', 'Mumbai', 'Hyderabad', 'Delhi NCR', 'Pune'],
+        'united states': ['San Francisco', 'New York', 'Seattle', 'Austin', 'Boston'],
+        'united kingdom': ['London', 'Manchester', 'Birmingham', 'Edinburgh', 'Bristol']
     }
-    return locations.get(normalized_country, locations["india"])
+    return locations.get(country, locations['india'])
 
-def get_default_market_demand(location: str = "india", experience_years: float = 0) -> Dict[str, Any]:
-    """Return enhanced default market demand data based on location and experience."""
-    country_code, currency_symbol, currency_format = get_country_code_and_currency(location)
+def get_default_market_demand(location: str, experience_years: float) -> Dict[str, Any]:
+    """Get default market demand data when API fails."""
+    normalized_country = normalize_country(location)
+    _, currency_symbol, _ = get_country_code_and_currency(normalized_country)
     
-    # Experience-based salary ranges
-    if currency_format == "indian":
-        if experience_years >= 5:
-            salary_range = f"{currency_symbol}15.00 L - {currency_symbol}35.00 L"
-        elif experience_years >= 3:
-            salary_range = f"{currency_symbol}8.00 L - {currency_symbol}18.00 L"
-        elif experience_years >= 1:
-            salary_range = f"{currency_symbol}5.00 L - {currency_symbol}10.00 L"
-        else:
-            salary_range = f"{currency_symbol}3.00 L - {currency_symbol}6.00 L"
-    elif currency_format == "british":
-        if experience_years >= 5:
-            salary_range = f"{currency_symbol}65,000 - {currency_symbol}120,000"
-        elif experience_years >= 3:
-            salary_range = f"{currency_symbol}45,000 - {currency_symbol}80,000"
-        elif experience_years >= 1:
-            salary_range = f"{currency_symbol}30,000 - {currency_symbol}50,000"
-        else:
-            salary_range = f"{currency_symbol}25,000 - {currency_symbol}35,000"
-    else:  # US format
-        if experience_years >= 5:
-            salary_range = f"{currency_symbol}120,000 - {currency_symbol}200,000"
-        elif experience_years >= 3:
-            salary_range = f"{currency_symbol}90,000 - {currency_symbol}150,000"
-        elif experience_years >= 1:
-            salary_range = f"{currency_symbol}70,000 - {currency_symbol}100,000"
-        else:
-            salary_range = f"{currency_symbol}50,000 - {currency_symbol}80,000"
+    # Base salary ranges by country (annual)
+    base_ranges = {
+        'india': (400000, 2500000),
+        'united states': (60000, 150000),
+        'united kingdom': (35000, 95000),
+        'canada': (60000, 130000),
+        'australia': (70000, 140000),
+        'germany': (45000, 90000),
+        'france': (35000, 80000),
+        'netherlands': (40000, 85000),
+        'singapore': (48000, 120000),
+        'japan': (4000000, 12000000)  # JPY
+    }
     
-    experience_level = "Senior" if experience_years >= 5 else "Mid-Level" if experience_years >= 2 else "Entry-Level"
+    base_min, base_max = base_ranges.get(normalized_country, base_ranges['india'])
+    
+    # Adjust salary based on experience
+    if experience_years >= 5:
+        min_salary = base_min * 1.5
+        max_salary = base_max * 1.8
+    elif experience_years >= 3:
+        min_salary = base_min * 1.2
+        max_salary = base_max * 1.4
+    else:
+        min_salary = base_min
+        max_salary = base_max * 1.2
     
     return {
         "trend": "Stable",
-        "trend_description": f"Market outlook for {experience_level} positions",
-        "salary_range": salary_range,
-        "top_industries": [
-            "Enterprise Software Development",
-            "Cloud Services & DevOps",
-            "FinTech & Banking Technology",
-            "AI/ML & Data Engineering",
-            "Cybersecurity & InfoSec"
-        ],
-        "top_locations": get_default_locations(location),
-        "top_demanded_skills": [
-            "Python",
-            "JavaScript",
-            "Cloud (AWS/Azure)",
-            "Data Analysis",
-            "Machine Learning"
-        ],
-        "future_outlook": "Positive",
-        "total_jobs": 1000,
-        "remote_percentage": "40%",
-        "experience_level": experience_level,
+        "trend_description": "Using default market data",
+        "salary_range": f"{currency_symbol}{int(min_salary):,} - {currency_symbol}{int(max_salary):,}",
+        "top_industries": ["Information Technology", "Software Development", "Computer Software", "Internet", "Technology Consulting"],
+        "top_locations": get_default_locations(normalized_country),
+        "top_demanded_skills": ["Python", "JavaScript", "Java", "SQL", "Cloud Computing"],
+        "top_tech_stack": ["React", "Node.js", "AWS", "Docker", "Kubernetes"],
+        "future_outlook": "Stable",
+        "total_jobs": 50,
+        "remote_percentage": "30%",
+        "experience_level": "Entry" if experience_years < 2 else "Mid" if experience_years < 5 else "Senior",
         "market_insights": {
             "competition_level": "Medium",
-            "best_time_to_apply": "Market is generally stable for experienced professionals" if experience_years >= 3 else "Entry level positions are competitive",
-            "salary_insights": f"Typical salary range for {experience_years} years experience in {location}",
-            "remote_work_availability": "Medium to High"
+            "best_time_to_apply": "Consider upskilling while applying",
+            "salary_insights": f"Estimated salary range for {experience_years} years experience in {location}",
+            "remote_work_availability": "Medium",
+            "market_maturity": "Growing",
+            "tech_stack_diversity": 15
         }
     }
 
@@ -968,6 +855,26 @@ common_tech_skills = [
     "DevOps", "CI/CD", "Git",
     "Agile", "Scrum", "Project Management"
 ]
+
+def extract_tech_stack(description: str) -> List[str]:
+    """Extract technology stack from job description."""
+    tech_keywords = {
+        'languages': ['python', 'java', 'javascript', 'typescript', 'c++', 'go', 'rust'],
+        'frontend': ['react', 'angular', 'vue', 'html', 'css'],
+        'backend': ['node.js', 'django', 'flask', 'spring'],
+        'cloud': ['aws', 'azure', 'gcp', 'docker', 'kubernetes'],
+        'database': ['sql', 'mongodb', 'postgresql', 'redis']
+    }
+    
+    found_tech = []
+    description_lower = description.lower()
+    
+    for category, techs in tech_keywords.items():
+        for tech in techs:
+            if tech in description_lower:
+                found_tech.append(tech)
+    
+    return sorted(list(set(found_tech)))
 
 def recommend_job_roles(skills: List[str], location: str = "india", experience_years: float = 0) -> Dict[str, Any]:
     """Generate job role recommendations based on skills and experience using Adzuna API."""
@@ -1066,11 +973,9 @@ def recommend_job_roles(skills: List[str], location: str = "india", experience_y
                         if job_id and job_id not in seen_jobs:
                             all_jobs.append(job)
                             seen_jobs.add(job_id)
-                            
             except Exception as e:
                 logging.error(f"Error searching with query '{query}': {str(e)}")
-                continue
-        
+
         if not all_jobs:
             logging.warning("No jobs found in API response")
             return get_default_recommendations(location, experience_years)
@@ -1182,7 +1087,7 @@ def recommend_job_roles(skills: List[str], location: str = "india", experience_y
             "learning_paths": learning_paths,
             "market_insights": market_insights
         }
-            
+        
     except Exception as e:
         logging.error(f"Error generating recommendations: {str(e)}")
         logging.error(traceback.format_exc())
@@ -1332,7 +1237,7 @@ def get_default_recommendations(location: str = "india", experience_years: float
         "learning_paths": learning_paths
     }
 
-def run_skill_gap_analysis(resume_input: str, job_description: str, location: str = "india", overall_experience: float = 0) -> Dict[str, Any]:
+def run_skill_gap_analysis(resume_input: str, job_description: str, location: str = "india", overall_experience: float = 0, resume_details: Dict[str, Any] = None) -> Dict[str, Any]:
     """Run the complete skill gap analysis."""
     logging.info("Starting skill gap analysis...")
     
@@ -1352,9 +1257,13 @@ def run_skill_gap_analysis(resume_input: str, job_description: str, location: st
         if not resume_text:
             raise ValueError("No resume text could be extracted or provided")
         
-        # Extract details with overall experience
-        logging.info("Extracting resume details...")
-        resume_details = extract_resume_details(resume_text, overall_experience)
+        # Use provided resume_details if available, otherwise extract from text
+        if resume_details is None:
+            logging.info("Extracting resume details...")
+            resume_details = extract_resume_details(resume_text, overall_experience)
+        else:
+            logging.info("Using provided resume details...")
+        
         resume_skills = resume_details.get("skills", [])
         
         # Extract job requirements
@@ -1369,7 +1278,7 @@ def run_skill_gap_analysis(resume_input: str, job_description: str, location: st
         
         # Analyze skill gaps with experience consideration
         logging.info("Analyzing skill gaps...")
-        gap_analysis = analyze_skill_gaps(resume_details, job_skills, job_title)
+        gap_analysis = analyze_skill_gaps(resume_details, job_skills)
         
         # Adjust match percentage based on overall experience
         if overall_experience > 0:
@@ -1381,7 +1290,7 @@ def run_skill_gap_analysis(resume_input: str, job_description: str, location: st
         
         # Get market demand data
         logging.info("Analyzing market demand...")
-        market_demand = analyze_market_demand(job_title, location, overall_experience)
+        market_demand = get_default_market_demand(location, overall_experience)
         
         # Find job matches
         logging.info("Finding job matches...")
