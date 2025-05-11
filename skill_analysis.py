@@ -21,6 +21,15 @@ import time
 from collections import Counter
 import streamlit as st
 
+# Import functions from utils to avoid duplication
+from utils import (
+    extract_text_from_pdf as utils_extract_text_from_pdf,
+    get_country_code_and_currency,
+    format_salary,
+    get_gemini_embedding,
+    generate_gemini_content
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -28,10 +37,10 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Configure Gemini API
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY secret is not set")
+# Configure Gemini API - use the same API_KEY from utils.py
+from utils import API_KEY
+GEMINI_API_KEY = API_KEY
+logging.info("Using API key from utils module")
 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -143,43 +152,7 @@ def find_skill_match(skill: str, skill_list: List[str]) -> Optional[str]:
         logging.error(f"Error finding skill match: {str(e)}")
         return None
 
-def get_gemini_embedding(text: str) -> List[float]:
-    """Generate embedding using a consistent hashing approach."""
-    try:
-        # Generate a more stable embedding using a consistent hashing approach
-        # Use a fixed dimension of 128 for embeddings
-        embedding_dim = 128
-        embedding = np.zeros(embedding_dim)
-        
-        # Normalize the text
-        text = text.lower().strip()
-        words = text.split()
-        
-        # Generate embedding values using word hashing
-        for i, word in enumerate(words):
-            # Use multiple hash functions to create a more distributed embedding
-            h1 = hash(word) % embedding_dim
-            h2 = hash(word + '_alt') % embedding_dim
-            h3 = hash(f'prefix_{word}') % embedding_dim
-            
-            # Add weighted values to different positions
-            embedding[h1] += 1.0
-            embedding[h2] += 0.5
-            embedding[h3] += 0.25
-        
-        # Normalize the embedding
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-        
-        return embedding.tolist()
-    except Exception as e:
-        logging.error(f"Error getting embedding: {str(e)}")
-        logging.error(traceback.format_exc())
-        # Return a normalized default embedding
-        default = np.zeros(128)
-        default[0] = 1.0
-        return default.tolist()
+# Using get_gemini_embedding imported from utils.py
 
 def get_model():
     """Returns a singleton instance of the model with retry logic."""
@@ -202,18 +175,13 @@ def cleanup_resources():
     except Exception as e:
         logging.error(f"Error during cleanup: {str(e)}")
 
+# Register cleanup function with atexit
+atexit.register(cleanup_resources)
+
 def extract_text_from_pdf(file_path: str) -> str:
     """Extract text from PDF file."""
-    try:
-        with open(file_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text()
-            return text.strip()
-    except Exception as e:
-        logging.error(f"Error reading PDF: {str(e)}")
-        raise
+    # Use the imported function from utils
+    return utils_extract_text_from_pdf(file_path)
 
 def extract_skill_level(text: str, skill: str, variations: List[str], overall_experience: float = 0) -> Dict[str, Any]:
     """Extract skill level and frequency information."""

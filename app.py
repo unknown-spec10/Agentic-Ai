@@ -2,12 +2,11 @@ import streamlit as st
 import json
 import tempfile
 import os
-from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles, generate_gemini_content, get_country_code_and_currency, format_salary
+from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles, generate_gemini_content, get_country_code_and_currency, format_salary, analyze_market_demand
 from skill_analysis import (
     extract_text_from_pdf,
     extract_resume_details,
     extract_job_requirements,
-    analyze_market_demand,
     run_skill_gap_analysis,
     analyze_skill_gaps
 )
@@ -258,6 +257,13 @@ if resume and job_title:
 
 # Sidebar information and cache control
 st.sidebar.info("💡 Upload your resume and enter an aspired role to analyze skill gaps, get job recommendations, and find job listings!")
+
+# Check if we're using a demo key
+from utils import API_KEY
+if API_KEY == "DEMO_KEY_FOR_TESTING_ONLY":
+    st.sidebar.warning("⚠️ **Demo Mode**: Currently running with a demo API key. Some features may be limited.")
+    st.sidebar.info("To use all features, provide your Gemini API key in environment variables or Streamlit secrets.")
+
 if st.sidebar.button("♻️ Clear Cache"):
     st.cache_data.clear()
     st.session_state.clear()

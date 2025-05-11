@@ -1,5 +1,7 @@
 # update_analysis.py
 import json
+import os
+import logging
 from utils import generate_learning_recommendations, MATCH_THRESHOLD, recommend_job_roles
 
 def generate_revised_skill_gap_analysis(analysis_json_path):
@@ -38,13 +40,25 @@ def generate_revised_skill_gap_analysis(analysis_json_path):
         return None
 
 
-def update_skill_analysis():
+def update_skill_analysis(analysis_file_path=None):
     """
     Update the existing skill gap analysis with better results
+    
+    Args:
+        analysis_file_path (str): Path to the analysis file to update
     """
     try:
+        # Use provided path or default to current directory
+        if not analysis_file_path:
+            analysis_file_path = os.path.join(os.getcwd(), "skill_gap_analysis.json")
+            
+        # Check if the file exists
+        if not os.path.exists(analysis_file_path):
+            print(f"❌ Analysis file not found at {analysis_file_path}")
+            return None
+            
         # Load existing skill gap analysis
-        with open("skill_gap_analysis.json", 'r', encoding='utf-8') as f:
+        with open(analysis_file_path, 'r', encoding='utf-8') as f:
             revised_analysis = json.load(f)
 
         # If job role recommendations don't exist in the original analysis, add them
@@ -61,11 +75,13 @@ def update_skill_analysis():
         recommendations = generate_learning_recommendations(revised_analysis["skill_gap_analysis"]["missing_skills"])
         revised_analysis["learning_recommendations"] = recommendations
 
-        # Save updated analysis
-        with open("updated_skill_gap_analysis.json", 'w', encoding='utf-8') as f:
+        # Save updated analysis in the same directory as the input file
+        output_path = os.path.join(os.path.dirname(analysis_file_path), "updated_skill_gap_analysis.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(revised_analysis, f, indent=4, ensure_ascii=False)
 
-        print("✅ Updated skill gap analysis saved to updated_skill_gap_analysis.json")
+        print(f"✅ Updated skill gap analysis saved to {output_path}")
+        return revised_analysis
     
     except Exception as e:
         print(f"❌ Error updating skill analysis: {e}")
