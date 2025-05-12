@@ -2,15 +2,17 @@ import streamlit as st
 import json
 import tempfile
 import os
-from utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles, generate_gemini_content, get_country_code_and_currency, format_salary, analyze_market_demand
-from skill_analysis import (
+
+# Import from src modules instead of root files
+from src.utils.general_utils import fetch_job_postings, generate_learning_recommendations, recommend_job_roles, generate_gemini_content, get_country_code_and_currency, format_salary, analyze_market_demand
+from src.core.skill_analysis import (
     extract_text_from_pdf,
     extract_resume_details,
     extract_job_requirements,
     run_skill_gap_analysis,
     analyze_skill_gaps
 )
-from update_analysis import update_skill_analysis
+from src.core.update_analysis import update_skill_analysis
 
 # Streamlit UI
 st.set_page_config(page_title="Skill Gap Analysis & Job Search", layout="wide")
@@ -223,7 +225,9 @@ if resume and job_title:
                                 col1, col2 = st.columns([2, 1])
                                 with col1:
                                     st.write(f"**Location:** {job['location']}")
-                                    st.write(f"**Salary:** {job['avg_salary']}")
+                                    # Handle both salary field naming conventions
+                                    salary_info = job.get('avg_salary', job.get('salary_range', 'Not specified'))
+                                    st.write(f"**Salary:** {salary_info}")
                                     st.write(f"**Match Score:** {job['match_score']}%")
                                     st.write(f"**Experience Match:** {job['experience_match']}")
                                 with col2:
@@ -259,7 +263,7 @@ if resume and job_title:
 st.sidebar.info("💡 Upload your resume and enter an aspired role to analyze skill gaps, get job recommendations, and find job listings!")
 
 # Check if we're using a demo key
-from utils import API_KEY
+from src.utils.general_utils import API_KEY
 if API_KEY == "DEMO_KEY_FOR_TESTING_ONLY":
     st.sidebar.warning("⚠️ **Demo Mode**: Currently running with a demo API key. Some features may be limited.")
     st.sidebar.info("To use all features, provide your Gemini API key in environment variables or Streamlit secrets.")
